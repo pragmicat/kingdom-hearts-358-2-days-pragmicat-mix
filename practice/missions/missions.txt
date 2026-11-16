@@ -1,0 +1,18 @@
+# The isolated practice profile loads this as its first custom mission: file 20000, id 3595.
+# These held spawners provide native enemy records; scripts/main.lua controls the actual encounters.
+[mission combat-practice]
+name en = Kingdom Hearts 358/2 Days: Combat Practice
+objective en = Practice your combos. Enemies return after each encounter.
+description en = Normal Roxas, directional Techniques and Drive. Ground, aerial and armored targets. Your campaign is separate.
+world = eh
+room = 2
+category = 4
+level = 20
+unlock = start
+start = 0 0.049 0 -90
+wave 1 = 4x1 at -2 0.049 -3
+wave 1 = 4x1 at 2 0.049 -3
+wave 1 = 0x1 at 0 0.049 -5
+wave 1 = 1x1 at -2 0.049 -3
+wave 1 = 1x1 at 2 0.049 -3
+wave 1 = 41x1 at 0 0.049 -4

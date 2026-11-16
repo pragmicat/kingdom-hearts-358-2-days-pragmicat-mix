@@ -1,10 +1,8 @@
-<p align="center"><img src="assets/kingdom-hearts-358-2-days-pragmicat-mix-logo.png" width="620" alt="Kingdom Hearts 358/2 Days: Pragmicat Mix"></p>
-
 # Kingdom Hearts 358/2 Days: Pragmicat Mix
 
 A combat overhaul and launcher built on [Yokimitsuro's native Days PC port **0.1.5**](https://github.com/Yokimitsuro/khdays-port/releases/tag/v0.1.5). Normal Roxas gets flowing Light chains, directional Techniques, selectable signature finishers, aerial pursuit, and a charged dual-wield Drive form.
 
-Source for a playable preview. Automated checks cover combat logic and native integration; a newly branded Windows release still needs to be built and validated. Combat feel and encounter balance still need hands-on review.
+Combat source and portable regression tests. Artwork integration and a newly branded Windows release still need to be completed and validated. Combat feel and encounter balance still need hands-on review. This source review branch does not contain the artwork required for Windows packaging.
 
 ### Play
 
@@ -39,7 +37,9 @@ python tests/verify_release.py
 python package.py
 ```
 
-`dist/` contains the standalone launcher and an optional ZIP. GitHub Actions runs the checks and attaches both to releases. Game files and saves are imported locally and are never included in downloads. `src/` contains native combat and practice entry, and `practice/` contains the arena.
+Once the Windows packaging assets are available and validated, `dist/` contains the standalone launcher and an optional ZIP. GitHub Actions currently runs the portable combat checks. Game files and saves are imported locally and are never included in downloads. `src/` contains native combat and practice entry, and `practice/` contains the arena.
+
+On Linux or macOS with a C++20 compiler, `python3 tests/run_tests.py` runs the portable mock-host suites. These checks cover combat logic, not Windows UI or actual gameplay. See [development progress and next priorities](docs/DEVELOPMENT.md).
 
 For optional real-engine combat checks, run `python tests/native_combat_smoke.py --help`. These require your prepared game data and use fresh test progress.
 

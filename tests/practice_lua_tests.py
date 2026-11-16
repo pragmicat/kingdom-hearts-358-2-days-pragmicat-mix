@@ -1,0 +1,132 @@
+"""Execute the shipped practice controller in Lua 5.4 against bounded native-API mocks."""
+from pathlib import Path
+from lupa.lua54 import LuaRuntime
+
+ROOT = Path(__file__).resolve().parents[1]
+runtime = LuaRuntime(unpack_returned_tuples=True)
+runtime.globals().SOURCE = (ROOT / 'practice/scripts/main.lua').read_text(encoding='utf-8')
+runtime.execute(r'''
+local function boot()
+  local c = { live = {}, made = {}, options = {}, reads = {}, holds = false, held_defeat = false,
+              hp = 100, kind = 0, ready = true, actor = true, loaded = {}, notices = 0, heals = 0 }
+  local handlers, next_id = {}, 0
+  local addresses = { [0x0204c242] = 20000, [0x0204c240] = 0, [0x0204c228] = 0,
+                      [0x020b2e7c] = 0x20000000, [0x20000004] = 0x20001000,
+                      [0x20001020] = 0x20010000 }
+  local function read(a)
+    c.reads[a] = true
+    if a == 0x2001000c then return c.kind end
+    if a == 0x020b2e7c and not c.actor then return 0 end
+    return addresses[a]
+  end
+  local env = setmetatable({ scene = {id=2}, mission = {id=3595},
+    memory = {u8=read,u16=read,u32=read,s32=read,loaded=function(id) return c.loaded[id] ~= false end},
+    mod = { on=function(name,f) handlers[name]=f end,
+            option=function(o) o.value=o.default; c.options[o.key]=o; return o end,
+            notice=function() c.notices=c.notices+1 end },
+    player = { max_hp=100, position=function() if c.actor then return 0,.049,0 end end,
+      set_hp=function(hp) if c.no_gauge then return nil,'not now' end; c.hp=hp; c.heals=c.heals+1; return true end,
+      set_position=function(x,y,z) assert(x==0 and y==.049 and z==0); c.recentred=true; return not c.no_place end,
+      take_defeat=function(on) c.held_defeat=on; return true end },
+    enemies = { hold_mission=function(on) c.holds=on; return true end,
+      kinds=function() local t={}; for _,id in ipairs({0,1,4,41}) do t[#t+1]={kind=id,ready=c.ready} end; return t end,
+      list=function() local t={}; for i,v in ipairs(c.live) do t[i]=v end; return t end,
+      remove=function(ids) for _,id in ipairs(ids) do for i=#c.live,1,-1 do if c.live[i]==id then table.remove(c.live,i) end end end; return true end,
+      make=function(spec)
+        c.made[#c.made+1]=spec
+        if c.reject == spec.kind then return nil,'no room' end
+        assert(spec.count==1 and spec.hp>0 and spec.strength>0 and spec.at[2]==.049)
+        next_id=next_id+1; c.live[#c.live+1]=next_id; assert(#c.live<=3); return {next_id}
+      end },
+  }, {__index=_G})
+  assert(load(SOURCE,'practice','t',env))()
+  function c.fire(name,e) if handlers[name] then handlers[name](e or {}) end end
+  function c.step(n,paused) for _=1,n do c.fire('frame',{paused=paused}) end end
+  function c.clear() c.live={} end
+  function c.reset() c.options.restart.on_change() end
+  function c.choose(value) c.options.targets.value=value; c.options.targets.on_change(value) end
+  c.env,c.addresses=env,addresses
+  return c
+end
+local groups=0
+local function test(name,f) f(); groups=groups+1; print('PASS '..name) end
+test('wrong mission and payload never take control',function()
+  for _,which in ipairs({'mission','file'}) do
+    local c=boot(); if which=='mission' then c.env.mission.id=1 else c.addresses[0x0204c242]=2 end
+    c.fire('mission_start'); c.step(200); assert(not c.holds and not c.held_defeat and #c.made==0 and c.heals==0)
+  end
+end)
+test('network session and unsupported character are refused',function()
+  local c=boot(); c.addresses[0x0204c228]=0x20020000; c.addresses[0x20020000]=3
+  c.step(200); assert(not c.holds and #c.made==0)
+  c=boot(); c.kind=1; c.step(200); assert(not c.holds and #c.made==0)
+end)
+test('loading waits for a real actor and battle resources',function()
+  local c=boot(); c.actor=false; c.loaded[107]=false; c.fire('mission_start'); c.step(200)
+  assert(c.holds and c.held_defeat and #c.made==0)
+  c.actor=true; c.loaded[107]=true; c.step(60); assert(#c.live==3)
+end)
+test('pause never advances a pending encounter',function()
+  local c=boot(); c.fire('mission_start'); c.step(500,true); assert(#c.made==0)
+  c.step(60); assert(#c.live==3)
+end)
+test('ground encounter uses bounded real native enemy classes',function()
+  local c=boot(); c.fire('scene',{to=2}); c.step(60)
+  assert(c.holds and c.held_defeat and #c.live==3 and c.made[1].kind==4 and c.made[3].kind==0)
+end)
+test('cleared encounters cycle ground then air then armor',function()
+  local c=boot(); c.step(60); c.clear(); c.step(110)
+  assert(#c.live==2 and c.made[#c.made].kind==1)
+  c.clear(); c.step(110); assert(#c.live==1 and c.made[#c.made].kind==41)
+  c.clear(); c.step(110); assert(#c.live==3 and c.made[#c.made].kind==0)
+end)
+test('single target option resets and retains one durable target',function()
+  local c=boot(); c.step(60); c.choose(2); c.step(110)
+  assert(#c.live==1 and c.made[#c.made].kind==4 and c.made[#c.made].hp==8 and c.recentred)
+  c.clear(); c.step(110); assert(#c.live==1 and c.made[#c.made].kind==4)
+end)
+test('manual reset removes the old encounter before spawning again',function()
+  local c=boot(); c.step(60); local before=#c.made; c.hp=10; c.reset(); c.step(1)
+  assert(#c.live==0 and c.hp==100 and #c.made==before)
+  c.step(100); assert(#c.live==3 and c.recentred)
+end)
+test('held lethal hit recovers health and restarts without game over',function()
+  local c=boot(); c.step(60); assert(c.held_defeat); c.hp=1; c.fire('defeat'); c.step(1)
+  assert(c.hp==100 and #c.live==0 and c.held_defeat)
+  c.step(100); assert(#c.live==3)
+end)
+test('temporary Drive actor keeps practice active',function()
+  local c=boot(); c.step(60); c.kind=19; c.clear(); c.step(110)
+  assert(c.holds and c.held_defeat and #c.live==2)
+end)
+test('partial enemy creation is not duplicated',function()
+  local c=boot(); c.reject=0; c.step(300); assert(#c.live==2 and #c.made==3)
+end)
+test('resource refusal retries finitely and emits one useful error',function()
+  local c=boot(); c.ready=false; c.step(1100); assert(#c.live==0 and c.notices==1)
+  c.step(1100); assert(c.notices==1)
+  c.ready=true; c.reset(); c.step(110); assert(#c.live==3)
+end)
+test('health gauge and reset placement wait for native readiness',function()
+  local c=boot(); c.no_gauge=true; c.step(200); assert(#c.made==0)
+  c.no_gauge=false; c.step(1); assert(#c.live==3)
+  c.no_place=true; c.reset(); c.step(120); assert(#c.live==0)
+  c.no_place=false; c.step(1); assert(#c.live==3)
+end)
+test('leaving the field cancels pending respawns and releases only practice holds',function()
+  local c=boot(); c.step(60); c.reset(); c.fire('mission_end'); c.env.scene.id=19; c.step(300)
+  assert(not c.holds and not c.held_defeat and #c.live==0 and #c.made==3)
+end)
+test('scope change never removes actors belonging to another field or session',function()
+  for _,reason in ipairs({'mission','file','network','actor'}) do
+    local c=boot(); c.step(60); c.live={999}
+    if reason=='mission' then c.env.mission.id=1
+    elseif reason=='file' then c.addresses[0x0204c242]=2
+    elseif reason=='network' then c.addresses[0x0204c228]=0x20020000; c.addresses[0x20020000]=3
+    else c.kind=1 end
+    c.step(200)
+    assert(not c.holds and not c.held_defeat and #c.live==1 and c.live[1]==999 and #c.made==3)
+  end
+end)
+print(('%d/15 practice Lua groups passed'):format(groups))
+''')
