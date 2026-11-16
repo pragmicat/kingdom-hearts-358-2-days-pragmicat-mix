@@ -43,6 +43,28 @@ Model make_model(const rxdrive::View& view, bool visible) noexcept {
     }
     return result;
 }
+Model make_feedback_model(const rxdrive::View& view, bool visible, std::uint64_t now_ms,
+                          ChargeFeedback& feedback) noexcept {
+    auto model = make_model(view, visible);
+    if (model.mode == Mode::Hidden) { feedback = {}; return model; }
+    const unsigned charge = std::min(view.charge, view.capacity);
+    const bool same_gauge = feedback.sampled && feedback.capacity == view.capacity &&
+        feedback.phase == rxdrive::Phase::Normal && view.phase == rxdrive::Phase::Normal;
+    if (!same_gauge || charge < feedback.charge) feedback.highlighting = false;
+    if (same_gauge && charge > feedback.charge && view.capacity) {
+        feedback.from = static_cast<float>(feedback.charge) / view.capacity;
+        feedback.to = model.fraction;
+        feedback.started_ms = now_ms;
+        feedback.highlighting = true;
+    }
+    if (feedback.highlighting && now_ms - feedback.started_ms < 300) {
+        model.gain_from = feedback.from;
+        model.gain_to = feedback.to;
+    } else feedback.highlighting = false;
+    feedback.sampled = true; feedback.charge = charge; feedback.capacity = view.capacity;
+    feedback.phase = view.phase;
+    return model;
+}
 Layout make_layout(int width, int height, unsigned dpi) noexcept {
     Layout out;
     if (width < 280 || height < 180 || width > 32768 || height > 32768) return out;
@@ -244,6 +266,13 @@ Image render(const Model& model, const Layout& layout) noexcept {
         rectangle(image, {track.x, track.y + track.height - unit, filled, unit},
                   {accent.r / 2, accent.g / 2, accent.b / 2,255});
     }
+    if (std::isfinite(model.gain_from) && std::isfinite(model.gain_to) && model.gain_to > model.gain_from) {
+        const int begin = std::min(filled, fill_width(model.gain_from, track.width));
+        const int end = std::min(filled, fill_width(model.gain_to, track.width));
+        if (end > begin)
+            rectangle(image, {track.x + begin, track.y + unit, end - begin, track.height - 2 * unit},
+                      model.mode == Mode::Ready ? Color{255,241,183,255} : Color{204,248,255,255});
+    }
     // Ten bounded cells make progress readable without adding another number.
     for (int cell = 1; cell < 10; ++cell)
         rectangle(image, {track.x + cell * track.width / 10 - unit, track.y, unit, track.height}, {8,19,31,255});
@@ -266,6 +295,7 @@ constexpr ULONGLONG kStaleMs = 500;
 struct Shared {
     SRWLOCK mutex = SRWLOCK_INIT;
     Model model;
+    ChargeFeedback feedback;
     bool enabled = true;
     std::atomic<bool> ready_ok{false};
     ULONGLONG updated = 0;
@@ -441,7 +471,7 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
 }
 struct PaintKey {
     Mode mode = Mode::Hidden;
-    int fill = -1, width = 0, height = 0, font = 0;
+    int fill = -1, gain_from = 0, gain_to = 0, width = 0, height = 0, font = 0;
     unsigned seconds = 0;
     std::array<char, 24> status{};
     bool operator==(const PaintKey&) const = default;
@@ -509,6 +539,7 @@ DWORD run_ui(Shared& state) {
             if (!hud) continue;
         }
         const PaintKey key{model.mode, fill_width(model.fraction, layout.track.width),
+                           fill_width(model.gain_from, layout.track.width), fill_width(model.gain_to, layout.track.width),
                            layout.panel.width, layout.panel.height, layout.font_px, model.seconds, model.status};
         if (!painted || !(key == last)) {
             const Image image = render(model, layout);
@@ -561,7 +592,9 @@ void update(const rxdrive::View& view, bool visible) noexcept {
     try {
     SrwGuard lock(lifecycle);
     if (!shared) return;
-    { SrwGuard state_lock(shared->mutex); shared->model = make_model(view, visible); shared->updated = GetTickCount64(); }
+    { SrwGuard state_lock(shared->mutex);
+      shared->updated = GetTickCount64();
+      shared->model = make_feedback_model(view, visible, shared->updated, shared->feedback); }
     SetEvent(shared->wake);
     } catch (...) {} // Never cross a native frame callback boundary.
 }

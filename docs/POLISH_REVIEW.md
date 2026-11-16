@@ -11,6 +11,10 @@
 | Reliable practice reset | Verify target removal, retry temporary refusals, then reset position and spawn once; offer manual retry after a persistent refusal | Practice regressions cover partial removal, retry, pause and changed field |
 | Readable Drive progress | Show charge percentage before READY, then existing queued/active states | HUD model checks rounding, full charge and large capacities |
 | Understandable commands | Separate grounded launcher/pursuit from airborne Enemy Step and document directional Techniques and normal magic selection | Control guide matches the current route and spell adapters |
+| Adjustable directional input | Native Precise / Standard / Forgiving choice changes toward/away cones while keeping neutral and side commands | Controller cases cover all profiles, default boundaries and captured direction |
+| Longer focused drills | Optional Extended combos targets use 3x preset HP without changing enemy count or strength | Lua cases cover every preset, next-spawn application and live status |
+| Defense practice across encounters | Optional On restart only HP recovery carries damage between waves, with manual/defeat recovery | Lua cases cover normal progression, repeat, pause, restart and scope |
+| Visible resource gain | A brief pale band marks newly added Drive charge in the existing gauge | Portable feedback and raster cases, plus an inspected offscreen preview |
 
 These changes have executable code/fixture checks. Native controller feel,
 Windows display and actual combat footage still need validation.

@@ -24,6 +24,12 @@ First setup finds your existing Days PC port and prepared game data, or asks you
 
 Directions are relative to the target. Signature directions select rush (toward), burst (away), or flurry (neutral/side). A signature requires a fresh Technique press while Light is held; pressing Light while Technique remains held continues the normal chain. Rebind the underlying buttons in the game's Settings. Mod options control speed, buffering, Drive duration, and its display.
 
+**Technique direction feel** offers **Precise**, **Standard** and **Forgiving**.
+Forgiving accepts wider diagonal inputs toward/away from your target for advancing
+strikes, launchers and Rush/Burst signatures. Precise leaves wider left/right
+regions for side Techniques. Standard keeps the original direction boundaries;
+all three retain neutral and side commands. Direction is captured when you press.
+
 Practice's Mods menu includes **Combat controls** and **Encounter status** for
 on-demand help. With the Mixed preset, **Encounter flow** can repeat the current
 group for focused drills; **Next mixed group** skips to the next ground, aerial
@@ -34,6 +40,20 @@ group and reminds you to restart when ready. **Restart encounter** starts the pl
 group; **Next mixed group** starts that group or advances a repeating drill.
 Automatic encounters remain the default. See the [visible interface review](docs/UI_REVIEW.md) for the
 new pixel HUD preview and launcher layout work.
+
+For focused drills, use these practice options:
+
+| Goal | Setting |
+| --- | --- |
+| Keep a target alive through longer ground or aerial chains | **Target durability → Extended combos (3x HP)** |
+| Practice defense across several encounters without a health refill | **HP recovery → On restart only** |
+| Repeat the same enemy group | **Encounter flow → Repeat current group** |
+| Take a break after each clear | **After clearing → Wait for Restart** |
+
+Durability applies to the next spawned group; it does not interrupt a current
+combo. On restart only carries damage across automatic next/repeat encounters.
+First entry, Restart, Next mixed group and defeat recovery still restore health.
+These training settings affect the separate practice arena.
 
 Light continues your normal ground or air chain. Technique changes with direction:
 
@@ -54,6 +74,8 @@ an eligible native spell request can flow out of the attack. Successful distinct
 melee actions gradually restore charges of equipped offensive spells; Cure is
 excluded. Drive shows charge as a percentage, then **READY** when available,
 **QUEUED** while waiting to transform, and time remaining once active.
+Newly gained Drive charge receives a brief pale accent on that part of the bar,
+giving a small combat-feedback cue without flashing the full display.
 
 ### Build
 

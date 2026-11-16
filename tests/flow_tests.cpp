@@ -52,6 +52,7 @@ KhEvents ev{};
 KhParameters parameters{};
 bool have_parameters;
 int configured_charge_hits;
+int configured_direction_style;
 
 void* ptr(KhRef ref) {
     auto it=live.upper_bound(ref);
@@ -207,6 +208,7 @@ KhResult replace(const char* name,void* replacement,void** previous) {
 }
 KhSubscription subscribe(KhPlugin*,const char*,KhEventFunction,void*) {static unsigned count=1;return count++;}
 int32_t parameter_integer(KhPlugin*,const char* name,int32_t fallback) {
+    if(std::strcmp(name,"technique_direction_style")==0)return configured_direction_style;
     return std::strcmp(name,"drive_charge_hits")==0?configured_charge_hits:fallback;
 }
 double parameter_number(KhPlugin*,const char*,double fallback) {return fallback;}
@@ -228,7 +230,7 @@ void reset() {
     paused=false;menu_depth=0;building=false;stopping=false;buffer_ticks=12;speed_fx=5120;style=0;last_input_frame=~0u;
     repertoire_debug=false;defensive_cancels=true;move_fx=4710;turn_fx=5325;
     drive_enabled=drive_meter=true;signature_damage_fx=4096;drive_settings={1000,25,2,900};
-    have_parameters=false;configured_charge_hits=40;
+    have_parameters=false;configured_charge_hits=40;configured_direction_style=1;technique_cone_degrees=45;
     parameters={sizeof(KhParameters),&parameter_integer,&parameter_number,nullptr};
     live.clear();allocation_heaps.clear();parts.clear();snapshots.clear();torn.clear();logs.clear();routines.clear();cursor=0x1000;
     loaded=true;blocked=room=seat=0;pad_frame=100;pad_pressed=pad_held=hidden=replace_calls=find_calls=speed_calls=0;
@@ -535,6 +537,47 @@ void equipped_stats_survive_every_borrowed_bank() {
         const auto& bank=player.banks[player.active_bank];
         CHECK(get<KhRef>(original_table,0x1a8+0x28)==get<KhRef>(bank.table,0x1a8+0x28));
     }
+    close();tear_original(original_table);
+}
+void technique_profiles_offer_diagonal_leniency_without_losing_side_moves() {
+    for(int selected=-1;selected<=3;++selected) {
+        reset();have_parameters=true;configured_direction_style=selected;launch();build_player();
+        put(actor,0x488,0);target_valid=0;
+        const int profile=std::clamp(selected,0,2);
+        input_heading=10240; // 56.25 degrees off toward
+        CHECK(input_direction(actor)==(profile==2?rxroutes::Direction::Toward:rxroutes::Direction::Left));
+        input_heading=22528; // 56.25 degrees off away
+        CHECK(input_direction(actor)==(profile==2?rxroutes::Direction::Away:rxroutes::Direction::Left));
+        input_heading=8192;
+        CHECK(input_direction(actor)==(profile==0?rxroutes::Direction::Left:rxroutes::Direction::Toward));
+        input_heading=16384;CHECK(input_direction(actor)==rxroutes::Direction::Left);
+        input_heading=49152;CHECK(input_direction(actor)==rxroutes::Direction::Right);
+        input_heading=-1;CHECK(input_direction(actor)==rxroutes::Direction::Neutral);
+        input_heading=10240;++pad_frame;pad_pressed=KH_BUTTON_X;pad_held=KH_BUTTON_A;
+        sample_input(actor);
+        CHECK(player.queued==static_cast<int>(profile==2?rxroutes::Action::Rush:rxroutes::Action::Flurry));
+        close();tear_original(original_table);
+    }
+}
+void technique_profile_directions_stay_target_relative_and_captured_at_press() {
+    for(int group:{0,1}) {
+        reset();have_parameters=true;configured_direction_style=2;launch();build_player();
+        target_valid=1;put(actor+0x3d00,0,5*4096);put(actor+0x3d00,8,0);
+        input_heading=59392;pad_pressed=KH_BUTTON_X;++pad_frame;sample_input(actor);
+        CHECK(player.direction==rxroutes::Direction::Toward);
+        put(actor+0x3d00,0,-5*4096); // target moves after the accepted button sample
+        CHECK(select_move(original_table,group,true));
+        CHECK(player.active_move==(group?4101:1));
+        close();tear_original(original_table);
+    }
+    reset();launch();build_player();put(actor,0x488,0);target_valid=0;
+    const std::pair<int,rxroutes::Direction> standard[]={
+        {0,rxroutes::Direction::Toward},{8192,rxroutes::Direction::Toward},
+        {8193,rxroutes::Direction::Left},{24576,rxroutes::Direction::Left},
+        {24577,rxroutes::Direction::Away},{32768,rxroutes::Direction::Away},
+        {40959,rxroutes::Direction::Away},{40960,rxroutes::Direction::Right},
+        {57343,rxroutes::Direction::Right},{57344,rxroutes::Direction::Toward}};
+    for(const auto& sample:standard){input_heading=sample.first;CHECK(input_direction(actor)==sample.second);}
     close();tear_original(original_table);
 }
 void light_after_held_technique_does_not_request_an_accidental_signature() {
@@ -1222,6 +1265,8 @@ int main() {
       {"default normal routes reach all sixteen stock attack clips",test::default_routes_cover_all_stock_attack_clips},
       {"stale SDK actor is refused and stop leaves retired actor memory alone",test::stale_sdk_actor_is_not_controlled_or_dereferenced_on_stop},
       {"target-relative directions and deliberately chosen signature chords",test::semantic_directions_and_signature_chords_are_stable},
+      {"Technique direction profiles offer diagonal leniency and retain all side commands",test::technique_profiles_offer_diagonal_leniency_without_losing_side_moves},
+      {"Technique profiles preserve target-relative capture and original Standard boundaries",test::technique_profile_directions_stay_target_relative_and_captured_at_press},
       {"Light after held Technique continues ground/air chains without accidental signatures",test::light_after_held_technique_does_not_request_an_accidental_signature},
       {"all borrowed moves retain equipped live weapon stats",test::equipped_stats_survive_every_borrowed_bank},
       {"Light pressure continues past five hits without forced signature",test::light_pressure_has_no_automatic_fifth_hit_or_signature},

@@ -25,13 +25,15 @@ constexpr Action finisher(Direction direction) {
     return direction == Direction::Toward ? Action::Rush :
            direction == Direction::Away ? Action::Burst : Action::Flurry;
 }
-constexpr Direction relative_direction(int movement, int target_heading) {
+constexpr Direction relative_direction(int movement, int target_heading, int cone_degrees = 45) {
     if (movement < 0) return Direction::Neutral;
-    // Directions are quantized once at the press, in target/world space. 45deg
-    // sectors keep the command stable when the camera or enemy moves afterward.
+    // Directions are quantized once at the press, in target/world space. Keep
+    // side commands available even with the forgiving forward/back profile.
+    const int degrees = cone_degrees < 30 ? 30 : cone_degrees > 60 ? 60 : cone_degrees;
+    const int half_width = degrees * 65536 / 360;
     const int difference = static_cast<std::int16_t>((movement - target_heading) & 0xffff);
-    if (difference >= -8192 && difference <= 8192) return Direction::Toward;
-    if (difference > 24576 || difference < -24576) return Direction::Away;
+    if (difference >= -half_width && difference <= half_width) return Direction::Toward;
+    if (difference > 32768 - half_width || difference < -(32768 - half_width)) return Direction::Away;
     return difference > 0 ? Direction::Left : Direction::Right;
 }
 constexpr Route choose(Context context, Action action, Direction direction) {

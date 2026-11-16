@@ -319,5 +319,57 @@ test('automatic drills and manual resets do not emit completion cues',function()
   c.clear(); c.step(1); assert(c.notices==2)
   c.env.mission.id=1; c.step(300); assert(c.notices==2 and not c.holds)
 end)
+test('extended combo targets apply on the next spawn without interrupting a drill',function()
+  for preset=1,4 do
+    local c=boot(); assert(c.options.durability.value==1)
+    c.choose(preset); c.step(110)
+    local count,live,heals=#c.made,#c.live,c.heals
+    local standard_hp=c.made[count].hp
+    c.options.durability.value=2; c.step(30)
+    assert(#c.made==count and #c.live==live and c.heals==heals)
+    c.options.status.on_change(); assert(not c.last_notice:find('3x preset HP',1,true))
+    c.reset(); c.step(110)
+    assert(#c.live==live and c.made[#c.made].hp==standard_hp*3)
+    for n=count+1,#c.made do assert(c.made[n].strength==.6 and c.made[n].count==1 and c.made[n].level==0) end
+    c.options.status.on_change(); assert(c.last_notice:find('3x preset HP',1,true) and #c.last_notice<=100)
+    c.options.durability.value=1; c.reset(); c.step(110)
+    assert(c.made[#c.made].hp==standard_hp)
+  end
+end)
+test('restart-only HP recovery carries damage across groups and repeat drills',function()
+  for repeat_group=1,2 do
+    local c=boot(); assert(c.options.hp_recovery.value==1)
+    c.options.hp_recovery.value=2; c.options.flow.value=repeat_group; c.hp=5; c.step(60)
+    assert(c.hp==100) -- initial practice entry still starts ready
+    c.hp=37; local heals=c.heals; c.clear(); c.step(110)
+    assert(c.hp==37 and c.heals==heals and #c.live==(repeat_group==2 and 3 or 2))
+    c.options.status.on_change(); assert(c.last_notice:find('HP: restart only',1,true))
+    c.hp=23; c.clear(); c.step(110); assert(c.hp==23 and c.heals==heals)
+    c.reset(); c.step(110); assert(c.hp==100 and c.recentred)
+    c.hp=12; c.options.next_group.on_change(); c.step(110); assert(c.hp==100)
+    c.hp=1; c.fire('defeat'); c.step(110); assert(c.hp==100 and c.held_defeat)
+  end
+end)
+test('HP policy changes defer to the next encounter and keep default recovery',function()
+  local c=boot(); c.step(60); c.hp=31; local heals=c.heals
+  c.options.hp_recovery.value=2; c.step(30); assert(c.hp==31 and c.heals==heals and #c.live==3)
+  c.options.hp_recovery.value=1; c.step(1); assert(c.hp==31)
+  c.clear(); c.step(110); assert(c.hp==100 and c.heals>heals)
+  c.options.hp_recovery.value=2; c.options.after_clear.value=2
+  c.hp=29; heals=c.heals; c.clear(); c.step(500)
+  assert(c.hp==29 and c.heals==heals and #c.live==0)
+  c.options.after_clear.value=1; c.step(110); assert(c.hp==29 and #c.live==1)
+end)
+test('extended defense drills remain bounded during pause and leave foreign actors alone',function()
+  local c=boot(); c.options.durability.value=2; c.options.hp_recovery.value=2; c.options.flow.value=2
+  c.step(60); c.hp=41; local count,heals=#c.made,c.heals
+  c.options.status.on_change()
+  assert(c.last_notice:find('Repeating',1,true) and c.last_notice:find('3x preset HP',1,true))
+  assert(c.last_notice:find('HP: restart only',1,true) and #c.last_notice<=100 and not c.last_notice:find('[^ -~]'))
+  c.clear(); c.step(500,true); assert(#c.made==count and c.hp==41 and c.heals==heals)
+  c.step(110); assert(#c.live==3 and c.hp==41 and c.made[#c.made].hp==12)
+  c.env.mission.id=1; c.live={999}; c.reset(); c.step(300)
+  assert(c.live[1]==999 and c.hp==41 and c.heals==heals and not c.holds)
+end)
 print(('%d/%d practice Lua groups passed'):format(groups,groups))
 ''')

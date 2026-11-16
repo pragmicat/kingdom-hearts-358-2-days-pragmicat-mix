@@ -12,6 +12,12 @@ three seconds or less adds a steady amber cue without flashing. Text and its
 shadow are rendered by the same portable code used for the production image;
 preview labels no longer depend on Windows font rendering.
 
+Newly added charge receives a brief 300 ms pale accent over that portion of the
+bar. Subsequent gains move the accent to the latest addition; it does not flash
+the entire panel. Hidden views, form changes, capacity changes and charge loss
+reset the feedback. The 36% and READY rows below show this presentation feature.
+It does not alter hit credit, damage, charge rate or input timing.
+
 ![Eight production-renderer states](previews/drive-hud.png)
 
 This is an offscreen renderer preview, not captured gameplay. Native HP-area

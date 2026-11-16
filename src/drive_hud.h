@@ -17,6 +17,14 @@ struct Model {
     float fraction = 0;
     unsigned seconds = 0;
     std::array<char, 24> status{};
+    float gain_from = 0, gain_to = 0; // brief highlight over newly earned charge only
+};
+struct ChargeFeedback {
+    bool sampled = false, highlighting = false;
+    unsigned charge = 0, capacity = 0;
+    rxdrive::Phase phase = rxdrive::Phase::Normal;
+    std::uint64_t started_ms = 0;
+    float from = 0, to = 0;
 };
 struct Image {
     int width = 0, height = 0;
@@ -24,6 +32,10 @@ struct Image {
     std::vector<std::uint32_t> pixels;
 };
 Model make_model(const rxdrive::View&, bool visible) noexcept;
+// Presentation only: no game-memory, resource or input changes. Hiding the HUD
+// resets the baseline so pause/resume and scene entry do not imitate earned hits.
+Model make_feedback_model(const rxdrive::View&, bool visible, std::uint64_t now_ms,
+                          ChargeFeedback&) noexcept;
 Layout make_layout(int client_width, int client_height, unsigned dpi = 96) noexcept;
 bool should_show(const Model&, bool enabled, bool owner_visible,
                  bool owner_minimized, bool owner_foreground, bool fresh) noexcept;

@@ -54,7 +54,7 @@ local function arm()
     enemies.hold_mission(false)
     return
   end
-  run = { phase = "waiting", ticks = 45, cycle = 1, failures = 0 }
+  run = { phase = "waiting", ticks = 45, cycle = 1, failures = 0, restore_hp = true }
 end
 
 local mode = mod.option{
@@ -62,6 +62,16 @@ local mode = mod.option{
   values = { "Mixed encounters", "Single ground target", "Aerial targets", "Armored target" },
   description = "Mixed follows Encounter flow through ground, aerial and armored groups. Changing the preset restarts this encounter.",
   on_change = function() reset_requested = true end,
+}
+local durability = mod.option{
+  key = "durability", kind = "choice", label = "Target durability", default = 1,
+  values = { "Standard", "Extended combos (3x HP)" },
+  description = "Extended combos gives targets three times this preset's usual HP, with the same attack strength and enemy count. Applies to the next encounter; Restart applies it now.",
+}
+local recovery = mod.option{
+  key = "hp_recovery", kind = "choice", label = "HP recovery", default = 1,
+  values = { "Between encounters", "On restart only" },
+  description = "Restore health between encounters, or carry damage into the next group for defense drills. Restart encounter, the next-group reset and defeat recovery always restore health.",
 }
 local flow = mod.option{
   key = "flow", kind = "choice", label = "Encounter flow", default = 1,
@@ -128,7 +138,9 @@ mod.option{
       mod.notice("Encounter reset queued. Practice will restart when play resumes.")
     elseif run.phase == "fighting" then
       local repeating = mode.value == 1 and flow.value == 2 and " Repeating." or ""
-      mod.notice(GROUP_NAMES[group_index()] .. ". Targets remaining: " .. #enemies.list() .. "." .. repeating)
+      local targets = run.hp_scale == 3 and " 3x preset HP." or ""
+      local healing = recovery.value == 2 and " HP: restart only." or ""
+      mod.notice(GROUP_NAMES[group_index()] .. ". Targets remaining: " .. #enemies.list() .. "." .. repeating .. targets .. healing)
     elseif run.phase == "failed" then
       mod.notice("Practice needs a retry. Choose Restart encounter to try again.")
     elseif run.phase == "cleared" then
@@ -168,6 +180,7 @@ local function reset_encounter()
   run.recovering = run.recovering or run.phase == "failed"
   run.phase, run.ticks, run.failures = "clearing", 0, 0
   reset_requested = false
+  run.restore_hp = true
   heal()
   clear_encounter()
 end
@@ -176,6 +189,7 @@ local function spawn()
   local ready = {}
   for _, entry in ipairs(enemies.kinds("all")) do ready[entry.kind] = entry.ready end
   local group = GROUPS[group_index()]
+  local hp_scale = durability.value == 2 and 3 or 1
   for _, target in ipairs(group) do
     if not ready[target[1]] then return false end
   end
@@ -183,10 +197,11 @@ local function spawn()
   for _, target in ipairs(group) do
     local handles = enemies.make{
       kind = target[1], count = 1, at = { target[2], HOME[2], target[3] },
-      level = 0, hp = target[4], strength = 0.6,
+      level = 0, hp = target[4] * hp_scale, strength = 0.6,
     }
     if handles ~= nil then made = made + #handles end
   end
+  if made > 0 then run.hp_scale = hp_scale end
   -- A partially filled group is played as it stands; retrying it would duplicate its live members.
   return made > 0
 end
@@ -234,9 +249,11 @@ mod.on("frame", function(e)
     if not heal() or not player.set_position(HOME[1], HOME[2], HOME[3]) then return end
     run.phase = "waiting"
   end
-  if #enemies.list() ~= 0 or not heal() then return end
+  if #enemies.list() ~= 0 then return end
+  if (recovery.value ~= 2 or run.restore_hp) and not heal() then return end
   if spawn() then
     run.phase, run.failures = "fighting", 0
+    run.restore_hp = false
     if run.recovering then
       mod.notice("Practice recovered. " .. GROUP_NAMES[group_index()] .. " ready.")
       run.recovering = false

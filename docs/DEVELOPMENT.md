@@ -6,6 +6,26 @@ Source version is **0.3.3**, targeting Yokimitsuro's native Days PC port **0.1.5
 This source review branch omits artwork. Windows packaging needs its original
 artwork assets integrated, followed by a fresh build and validation.
 
+## Current player-facing additions
+
+- **Technique direction feel:** native Precise / Standard / Forgiving choices
+  use 30/45/60-degree toward/away half-cones. Standard retains the previous
+  boundaries. Side and neutral moves remain available, and direction still locks
+  at the button press. Damage, animation speed and movement are unchanged.
+- **Longer combo drills:** Practice's Extended combos option uses three times
+  each preset's normal target HP. It applies at the next spawn without replacing
+  live enemies; actor counts, kinds and attack strength are unchanged.
+- **Defense drills:** Practice's On restart only HP policy carries damage across
+  automatic next/repeat encounters. First entry, Restart, Next mixed group and
+  defeat recovery still heal. These settings stay in the isolated practice profile.
+- **Drive gain feedback:** a 300 ms pale accent shows the latest added charge in
+  the existing gauge, without flashing the panel. Pause/hidden views, form changes
+  and resource resets clear it. See the updated renderer preview in UI_REVIEW.md.
+
+Combined validation passes **194 portable C++ cases** and **33 practice Lua
+groups**. The new choices and presentation need native controller/UI review. The offline
+HUD preview uses production rendering code and is not a gameplay capture.
+
 The Drive-hook recovery follow-up passes **17 Drive cases**. Initialization
 resolves the original party-unload routine before installing its hook. Missing
 or refused hooks leave native dispatch intact; an installation with a missing

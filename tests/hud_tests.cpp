@@ -127,8 +127,46 @@ void raster_distinguishes_empty_partial_and_full_charge() {
         CHECK(at(ended,0)==at(empty,0));
     }
 }
-std::array<rxhud::Model,9> display_states() {
-    std::array<rxhud::Model,9> result{};
+void earned_charge_has_a_brief_local_highlight() {
+    auto v=view();v.charge=200;rxhud::ChargeFeedback feedback;
+    auto model=rxhud::make_feedback_model(v,true,100,feedback);
+    CHECK(model.gain_from==0 && model.gain_to==0); // entering an existing gauge is quiet
+    v.charge=400;model=rxhud::make_feedback_model(v,true,150,feedback);
+    CHECK(model.gain_from==.2F && model.gain_to==.4F && std::strcmp(model.status.data(),"40%")==0);
+    const auto layout=rxhud::make_layout(1280,720);
+    const auto gained=rxhud::render(model,layout), normal=rxhud::render(rxhud::make_model(v,true),layout);
+    const auto at=[&](const rxhud::Image& image,int x) {
+        return image.pixels[static_cast<std::size_t>(layout.track.y+layout.track.height/2)*image.width+layout.track.x+x];
+    };
+    CHECK(at(gained,layout.track.width*3/10)!=at(normal,layout.track.width*3/10));
+    CHECK(at(gained,2)==at(normal,2)); // old charge keeps its original color
+    CHECK(at(gained,layout.track.width*8/10)==at(normal,layout.track.width*8/10)); // no fill beyond actual charge
+    CHECK(rxhud::make_feedback_model(v,true,449,feedback).gain_to==.4F);
+    CHECK(rxhud::make_feedback_model(v,true,450,feedback).gain_to==0);
+    v.charge=1000;v.ready=true;model=rxhud::make_feedback_model(v,true,500,feedback);
+    CHECK(model.mode==rxhud::Mode::Ready && model.gain_from==.4F && model.gain_to==1);
+    CHECK(rxhud::make_feedback_model(v,true,800,feedback).gain_to==0);
+}
+void charge_highlights_follow_real_gains_and_reset_with_context() {
+    auto v=view();rxhud::ChargeFeedback feedback;
+    rxhud::make_feedback_model(v,true,0,feedback);
+    v.charge=100;rxhud::make_feedback_model(v,true,1,feedback);
+    v.charge=200;auto model=rxhud::make_feedback_model(v,true,2,feedback);
+    CHECK(model.gain_from==.1F && model.gain_to==.2F); // latest gain, no growing flash over the whole gauge
+    CHECK(rxhud::make_feedback_model(v,false,3,feedback).mode==rxhud::Mode::Hidden);
+    CHECK(rxhud::make_feedback_model(v,true,4,feedback).gain_to==0);
+    v.charge=50;CHECK(rxhud::make_feedback_model(v,true,5,feedback).gain_to==0);
+    v.charge=100;CHECK(rxhud::make_feedback_model(v,true,6,feedback).gain_to>.0F);
+    v.capacity=2000;CHECK(rxhud::make_feedback_model(v,true,7,feedback).gain_to==0);
+    v.phase=rxdrive::Phase::Active;v.remaining_ticks=900;
+    CHECK(rxhud::make_feedback_model(v,true,8,feedback).gain_to==0);
+    v.phase=rxdrive::Phase::Normal;v.charge=1000;v.ready=true;
+    CHECK(rxhud::make_feedback_model(v,true,9,feedback).gain_to==0);
+    v.phase=rxdrive::Phase::ActivationQueued;v.charge=v.capacity;
+    CHECK(rxhud::make_feedback_model(v,true,10,feedback).gain_to==0);
+}
+std::array<rxhud::Model,10> display_states() {
+    std::array<rxhud::Model,10> result{};
     auto v=view();
     for(unsigned index=0;index<result.size();++index) {
         v.phase=index==4?rxdrive::Phase::ActivationQueued:index==7?rxdrive::Phase::RestorationQueued:
@@ -139,6 +177,7 @@ std::array<rxhud::Model,9> display_states() {
         if(index==8)v.remaining_ticks=v.duration_ticks;
         result[index]=rxhud::make_model(v,true);
     }
+    result[9]=result[1];result[9].gain_from=.25F;result[9].gain_to=.36F;
     return result;
 }
 void portable_glyphs_are_visible_crisp_and_contained() {
@@ -338,7 +377,14 @@ void write_preview(const char* path) {
                 row>=5?rxdrive::Phase::Active:rxdrive::Phase::Normal;
         v.charge=row==0?0u:row==1?360u:row==2?990u:1000u;v.ready=row==3;
         v.remaining_ticks=row==6?120u:row==7?0u:421u;
-        const auto image=rxhud::render(rxhud::make_model(v,true),layout);
+        auto model=rxhud::make_model(v,true);
+        if(row==1 || row==3) {
+            auto previous=v;previous.charge=row==1?250u:900u;previous.ready=false;
+            rxhud::ChargeFeedback feedback;
+            rxhud::make_feedback_model(previous,true,0,feedback);
+            model=rxhud::make_feedback_model(v,true,100,feedback);
+        }
+        const auto image=rxhud::render(model,layout);
         CHECK(!image.pixels.empty());
         for(int y=0;y<image.height;++y)for(int x=0;x<image.width;++x) {
             const auto source=image.pixels[static_cast<std::size_t>(y)*image.width+x];
@@ -366,6 +412,8 @@ int main(int argc,char** argv) {
         {"client resize and DPI layout bounds",test::layouts_fit_resizes_and_dpi_without_covering_bottom_edge},
         {"premultiplied raster and real fraction fill",test::raster_has_premultiplied_alpha_and_distinct_actual_fill},
         {"charge raster distinguishes empty, partial, full and last active tick",test::raster_distinguishes_empty_partial_and_full_charge},
+        {"earned charge briefly highlights only the newly filled region",test::earned_charge_has_a_brief_local_highlight},
+        {"charge feedback follows real gains and resets across context changes",test::charge_highlights_follow_real_gains_and_reset_with_context},
         {"portable pixel glyphs are visible, crisp and contained",test::portable_glyphs_are_visible_crisp_and_contained},
         {"all HUD states fit small windows, high DPI and long timers",test::every_state_fits_minimum_windows_dpi_and_long_timers},
         {"last three seconds use a steady warm cue",test::low_time_uses_a_steady_warm_cue_without_changing_timer},

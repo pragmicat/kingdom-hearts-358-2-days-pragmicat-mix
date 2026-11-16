@@ -37,6 +37,7 @@ KhRef scene_ctl, cinematic_flag, boot_flags;
 bool paused = false, building = false, stopping = false;
 unsigned menu_depth = 0;
 int buffer_ticks = 12, speed_fx = 5120, move_fx = 4710, turn_fx = 5325, style = 0;
+int technique_cone_degrees = 45;
 bool defensive_cancels = true;
 bool repertoire_debug = false;
 bool drive_enabled = true, drive_meter = true;
@@ -527,7 +528,7 @@ rxroutes::Direction input_direction(KhRef actor) {
                 toward = static_cast<int>(std::atan2(-dx, -dz) * (32768.0 / 3.14159265358979323846)) & 0xffff;
         }
     }
-    return rxroutes::relative_direction(movement, toward);
+    return rxroutes::relative_direction(movement, toward, technique_cone_degrees);
 }
 bool form_transition_requested() {
     const auto phase = rxdrive::view().phase;
@@ -981,6 +982,8 @@ KhResult start(const KhHost* given) {
         !input->pressed || !input->held || !actors->position || !net->in_room || !events->subscribe) return KH_UNSUPPORTED;
     if (parameters && parameters->size >= sizeof(KhParameters) && parameters->integer && parameters->number) {
         buffer_ticks = std::clamp(parameters->integer(host->plugin, "buffer_ms", 200), 50, 400) * 60 / 1000;
+        const int direction_style = std::clamp(parameters->integer(host->plugin, "technique_direction_style", 1), 0, 2);
+        technique_cone_degrees = 30 + 15 * direction_style;
         speed_fx = static_cast<int>(std::clamp(parameters->number(host->plugin, "attack_speed", 1.25), 1.0, 1.6) * 4096);
         move_fx = static_cast<int>(std::clamp(parameters->number(host->plugin, "movement_speed", 1.15), 1.0, 1.4) * 4096);
         turn_fx = static_cast<int>(std::clamp(parameters->number(host->plugin, "turn_speed", 1.3), 1.0, 1.6) * 4096);
