@@ -371,5 +371,69 @@ test('extended defense drills remain bounded during pause and leave foreign acto
   c.env.mission.id=1; c.live={999}; c.reset(); c.step(300)
   assert(c.live[1]==999 and c.hp==41 and c.heals==heals and not c.holds)
 end)
+test('Endless Heartless refills individual losses without removing surviving enemies',function()
+  local c=boot(); c.choose(5); c.step(110)
+  assert(c.options.targets.values[5]=='Endless Heartless' and #c.live==3 and #c.made==3)
+  local survivor=c.live[2]; table.remove(c.live,1); c.hp=37; local heals=c.heals
+  c.step(40)
+  assert(#c.live==3 and #c.made==4 and c.live[1]==survivor and c.hp==37 and c.heals==heals)
+  c.options.status.on_change()
+  assert(c.last_notice:find('Endless wave 1',1,true) and c.last_notice:find('Cleared: 1',1,true))
+  c.step(1000); assert(#c.live==3 and #c.made==4) -- no timed duplication of live targets
+end)
+test('endless waves cycle all native groups and continue past an entire rotation',function()
+  local c=boot(); c.choose(5); c.options.flow.value=2; c.options.after_clear.value=2; c.step(110)
+  local saw={}; local largest=0
+  for wave=1,7 do
+    c.options.status.on_change(); assert(c.last_notice:find('Endless wave '..wave..'.',1,true))
+    local expected=({3,2,1})[(wave-1)%3+1]
+    assert(#c.live==expected)
+    saw[c.made[#c.made].kind]=true
+    -- Each wave contains two sets of its bounded group; killing the first set
+    -- causes continuous replacements rather than advancing immediately.
+    c.clear(); c.step(expected*31+5); assert(#c.live==expected)
+    largest=math.max(largest,#c.live)
+    c.clear(); c.step(40)
+  end
+  assert(saw[0] and saw[1] and saw[41] and largest==3 and c.holds and c.held_defeat)
+  c.options.status.on_change(); assert(c.last_notice:find('Endless wave 8.',1,true))
+  assert(not c.last_notice:find('Restart encounter',1,true)) -- manual-after-clear is a drill-only choice
+end)
+test('endless durability stays per wave and HP recovery waits for wave boundaries',function()
+  for recovery=1,2 do
+    local c=boot(); c.choose(5); c.options.hp_recovery.value=recovery; c.options.durability.value=2
+    c.step(110); assert(c.made[1].hp==10.5 and c.made[3].hp==12)
+    c.options.durability.value=1; c.hp=29; local heals=c.heals
+    table.remove(c.live,1); c.step(40)
+    assert(c.made[4].hp==10.5 and c.hp==29 and c.heals==heals)
+    c.options.status.on_change(); assert(c.last_notice:find('3x HP.',1,true) and #c.last_notice<=100)
+    if recovery==2 then assert(c.last_notice:find('No wave heal.',1,true)) end
+    c.clear(); c.step(70); assert(#c.live==2 and c.hp==29)
+    c.clear(); c.step(40)
+    assert(#c.live==2 and c.made[#c.made].kind==1 and c.made[#c.made].hp==4)
+    assert(c.hp==(recovery==1 and 100 or 29))
+  end
+end)
+test('endless pause restart and defeat preserve safe bounded run ownership',function()
+  local c=boot(); c.choose(5); c.options.hp_recovery.value=2; c.step(110)
+  table.remove(c.live,1); local count=#c.made;c.step(500,true); assert(#c.made==count and #c.live==2)
+  c.step(40); assert(#c.live==3)
+  c.options.status.on_change();assert(c.last_notice:find('Cleared: 1',1,true))
+  c.hp=7;c.reset();c.step(500,true);assert(c.hp==7 and #c.live==3)
+  c.step(110);c.options.status.on_change()
+  assert(c.hp==100 and c.last_notice:find('Endless wave 1.',1,true) and c.last_notice:find('Cleared: 0',1,true))
+  c.hp=1;c.fire('defeat');c.step(110);assert(c.hp==100 and #c.live==3)
+  c.env.mission.id=1;c.live={999};count=#c.made;c.step(500)
+  assert(c.live[1]==999 and #c.made==count and not c.holds and not c.held_defeat)
+end)
+test('endless replacement refusals stop finitely and a manual restart recovers',function()
+  local c=boot();c.choose(5);c.step(110);table.remove(c.live,1)
+  c.ready=false;local count=#c.made;c.step(1000)
+  assert(#c.live==2 and #c.made==count and c.last_notice:find('needs a retry',1,true))
+  local notices=c.notices;c.step(1000);assert(c.notices==notices and #c.made==count)
+  c.ready=true;c.reset();c.step(110)
+  assert(#c.live==3 and c.hp==100 and c.last_notice:find('recovered',1,true))
+  c.options.status.on_change();assert(c.last_notice:find('Endless wave 1.',1,true))
+end)
 print(('%d/%d practice Lua groups passed'):format(groups,groups))
 ''')

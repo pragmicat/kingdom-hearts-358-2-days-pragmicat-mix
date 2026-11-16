@@ -19,5 +19,7 @@ jobs:
       - run: python tests/run_tests.py
       - run: python -m pip install lupa==2.8
       - run: python tests/practice_lua_tests.py
+      - name: Check local-ROM browser player
+        run: node --test web/tests/*.test.mjs
       - name: Link complete portable plugin
         run: g++ -std=c++20 -shared -fPIC -Wall -Wextra -Ivendor/sdk/include -Igenerated src/*.cpp -o /tmp/pragmicat_mix.so

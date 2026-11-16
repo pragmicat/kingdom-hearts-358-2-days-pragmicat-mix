@@ -6,6 +6,8 @@
 /tests/generated_fixture.h
 /tests/*results.txt
 /tests/*verification.json
+/web/native/**/build-web/
+/web/native/**/build-native/
 __pycache__/
 *.py[cod]
 *.obj

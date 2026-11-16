@@ -8,6 +8,33 @@ artwork assets integrated, followed by a fresh build and validation.
 
 ## Current player-facing additions
 
+**Latest priority: browser play from a local ROM using the actual Days
+recompilation, including Pragmicat combat and Endless Heartless.** The user
+explicitly rejected the stock-emulator fallback. That temporary player has been
+removed; do not restore it. `web/` now contains the real local-ROM importer
+(10 Node groups) and source-only native WebAssembly components. The hosted page
+reports that the browser game is not ready; it does not claim playable combat.
+A cloud file-picker QA attempt was denied because upload permission was declined;
+do not retry it indirectly or claim an observed Days boot.
+
+**Endless Heartless is implemented in the native practice source.** Select
+Target preset 5 to refill individual defeated enemies while survivors remain,
+then rotate bounded ground/aerial/armored waves without a final wave. Wave and
+cleared counts, locked per-wave durability, healing at wave boundaries, pause,
+defeat and finite failure recovery pass all **38 Lua groups**. This does not make
+the mode available in the original-game emulator.
+
+`web/native/` preserves source-only, pinned-dependency port work. Real Wasm tests
+pass for upstream CPU rendering to Canvas, Asyncify fibers, a compact-memory
+experiment and one original combo routine through upstream reference generation
+and a static hook record. These are components, not a game build. Next implement
+whole-program Clang preprocessing/static registration and integrate the memory
+path, considering upstream `KHDAYS_DS_MEMORY=1` for the first boot. Browser frame
+loop/input/audio/save services and linking the actual mod/Lua host still remain.
+Read `web/native/README.md` before extending these experiments. Keep original DS
+emulation labeled honestly until the actual mod runs. Do not publish ROMs or
+generated game C, or claim mock/component tests establish gameplay.
+
 - **Technique direction feel:** native Precise / Standard / Forgiving choices
   use 30/45/60-degree toward/away half-cones. Standard retains the previous
   boundaries. Side and neutral moves remain available, and direction still locks

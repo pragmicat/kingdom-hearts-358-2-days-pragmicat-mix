@@ -54,13 +54,14 @@ local function arm()
     enemies.hold_mission(false)
     return
   end
-  run = { phase = "waiting", ticks = 45, cycle = 1, failures = 0, restore_hp = true }
+  run = { phase = "waiting", ticks = 45, cycle = 1, failures = 0, restore_hp = true,
+          wave = 1, cleared = 0, endless_spawned = 0, endless_targets = {}, refill_ticks = 30 }
 end
 
 local mode = mod.option{
   key = "targets", kind = "choice", label = "Target preset", default = 1,
-  values = { "Mixed encounters", "Single ground target", "Aerial targets", "Armored target" },
-  description = "Mixed follows Encounter flow through ground, aerial and armored groups. Changing the preset restarts this encounter.",
+  values = { "Mixed encounters", "Single ground target", "Aerial targets", "Armored target", "Endless Heartless" },
+  description = "Endless refills defeated Heartless through ground, aerial and armored waves. At most three enemies stay active. Changing the preset restarts this encounter.",
   on_change = function() reset_requested = true end,
 }
 local durability = mod.option{
@@ -71,7 +72,7 @@ local durability = mod.option{
 local recovery = mod.option{
   key = "hp_recovery", kind = "choice", label = "HP recovery", default = 1,
   values = { "Between encounters", "On restart only" },
-  description = "Restore health between encounters, or carry damage into the next group for defense drills. Restart encounter, the next-group reset and defeat recovery always restore health.",
+  description = "Restore health between encounters/endless waves, or carry damage for defense drills. Restart, next-group reset and defeat recovery always restore health; endless replacements do not heal.",
 }
 local flow = mod.option{
   key = "flow", kind = "choice", label = "Encounter flow", default = 1,
@@ -81,7 +82,7 @@ local flow = mod.option{
 local after_clear = mod.option{
   key = "after_clear", kind = "choice", label = "After clearing", default = 1,
   values = { "Start next encounter", "Wait for Restart" },
-  description = "Start another encounter automatically, or leave the arena clear until Restart encounter. Switching back resumes the normal delay.",
+  description = "Start another encounter automatically, or wait for Restart after a clear. Endless Heartless always continues; use another preset for paused drills.",
 }
 mod.option{
   key = "next_group", kind = "button", label = "Next mixed group",
@@ -104,7 +105,7 @@ mod.option{
 }
 mod.option{
   key = "restart", kind = "button", label = "Restart encounter",
-  description = "Restore health and starting position, then replace the targets. Keep the selected preset.",
+  description = "Restore health and starting position, then replace the targets. Endless Heartless starts a fresh run at wave 1; other presets stay selected.",
   on_change = function() reset_requested = true end,
 }
 mod.option{
@@ -137,6 +138,13 @@ mod.option{
     elseif reset_requested then
       mod.notice("Encounter reset queued. Practice will restart when play resumes.")
     elseif run.phase == "fighting" then
+      if mode.value == 5 then
+        local targets = run.hp_scale == 3 and " 3x HP." or ""
+        local healing = recovery.value == 2 and " No wave heal." or ""
+        mod.notice("Endless wave " .. run.wave .. ". Active: " .. #enemies.list() ..
+                   ". Cleared: " .. run.cleared .. ". " .. GROUP_NAMES[group_index()] .. "." .. targets .. healing)
+        return
+      end
       local repeating = mode.value == 1 and flow.value == 2 and " Repeating." or ""
       local targets = run.hp_scale == 3 and " 3x preset HP." or ""
       local healing = recovery.value == 2 and " HP: restart only." or ""
@@ -181,8 +189,21 @@ local function reset_encounter()
   run.phase, run.ticks, run.failures = "clearing", 0, 0
   reset_requested = false
   run.restore_hp = true
+  if mode.value == 5 then
+    run.cycle, run.wave, run.cleared = 1, 1, 0
+    run.endless_announced = nil
+  end
+  run.endless_spawned, run.endless_targets = 0, {}
+  run.refill_ticks, run.endless_failures = 30, 0
   heal()
   clear_encounter()
+end
+
+local function make_target(target, hp_scale)
+  return enemies.make{
+    kind = target[1], count = 1, at = { target[2], HOME[2], target[3] },
+    level = 0, hp = target[4] * hp_scale, strength = 0.6,
+  }
 end
 
 local function spawn()
@@ -194,16 +215,68 @@ local function spawn()
     if not ready[target[1]] then return false end
   end
   local made = 0
-  for _, target in ipairs(group) do
-    local handles = enemies.make{
-      kind = target[1], count = 1, at = { target[2], HOME[2], target[3] },
-      level = 0, hp = target[4] * hp_scale, strength = 0.6,
-    }
+  for slot, target in ipairs(group) do
+    local handles = make_target(target, hp_scale)
     if handles ~= nil then made = made + #handles end
+    if mode.value == 5 and handles ~= nil then
+      for _, handle in ipairs(handles) do run.endless_targets[handle] = slot end
+    end
   end
-  if made > 0 then run.hp_scale = hp_scale end
+  if made > 0 then
+    run.hp_scale = hp_scale
+    if mode.value == 5 then run.endless_spawned = made end
+  end
   -- A partially filled group is played as it stands; retrying it would duplicate its live members.
   return made > 0
+end
+
+local function step_endless()
+  local targets, live, occupied = enemies.list(), {}, {}
+  for _, handle in ipairs(targets) do live[handle] = true end
+  for handle, slot in pairs(run.endless_targets) do
+    if live[handle] then occupied[slot] = true
+    else
+      run.endless_targets[handle] = nil
+      run.cleared = run.cleared + 1
+    end
+  end
+  local group = GROUPS[group_index()]
+  -- Each wave plays two sets of its native group. Individual losses refill
+  -- while the other enemies remain alive; no survivor is removed or duplicated.
+  if run.endless_spawned >= #group * 2 and #targets == 0 then
+    run.wave, run.cycle = run.wave + 1, run.cycle % 3 + 1
+    run.phase, run.ticks = "waiting", 30
+    run.endless_spawned, run.endless_targets = 0, {}
+    run.refill_ticks, run.endless_failures = 30, 0
+    return
+  end
+  if run.refill_ticks > 0 then run.refill_ticks = run.refill_ticks - 1; return end
+  if #targets >= #group or run.endless_spawned >= #group * 2 then return end
+  local ready = {}
+  for _, entry in ipairs(enemies.kinds("all")) do ready[entry.kind] = entry.ready end
+  local made = false
+  for slot, target in ipairs(group) do
+    if not occupied[slot] then
+      if ready[target[1]] then
+        local handles = make_target(target, run.hp_scale)
+        if handles ~= nil and #handles > 0 then
+          for _, handle in ipairs(handles) do run.endless_targets[handle] = slot end
+          run.endless_spawned = run.endless_spawned + #handles
+          made = true
+        end
+      end
+      break -- at most one replacement attempt per interval
+    end
+  end
+  run.refill_ticks = 30
+  if made then run.endless_failures = 0
+  else
+    run.endless_failures = (run.endless_failures or 0) + 1
+    if run.endless_failures >= 20 then
+      run.phase = "failed"
+      mod.notice("Endless Heartless needs a retry. Choose Restart encounter to start a fresh run.")
+    end
+  end
 end
 
 mod.on("mission_start", function()
@@ -226,6 +299,7 @@ mod.on("frame", function(e)
   if player.position() == nil then return end
   if reset_requested then reset_encounter() end
   if run.phase == "fighting" then
+    if mode.value == 5 then step_endless(); return end
     if #enemies.list() == 0 then
       run.advanced_on_clear = mode.value == 1 and flow.value ~= 2
       if run.advanced_on_clear then run.cycle = run.cycle % 3 + 1 end
@@ -254,6 +328,10 @@ mod.on("frame", function(e)
   if spawn() then
     run.phase, run.failures = "fighting", 0
     run.restore_hp = false
+    if mode.value == 5 and run.endless_announced ~= run.wave then
+      run.endless_announced = run.wave
+      mod.notice("Endless Heartless - Wave " .. run.wave .. ": " .. GROUP_NAMES[group_index()] .. ".")
+    end
     if run.recovering then
       mod.notice("Practice recovered. " .. GROUP_NAMES[group_index()] .. " ready.")
       run.recovering = false

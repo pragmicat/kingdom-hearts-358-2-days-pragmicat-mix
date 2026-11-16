@@ -6,6 +6,12 @@ Combat source and portable regression tests. Artwork integration and a newly bra
 
 ### Play
 
+A browser build of the **actual Days recompilation** is in progress, including
+Pragmicat combat and Endless Heartless. It is not playable in the browser yet.
+The [private browser preview](https://days-pragmicat-browser.keensaffron16.chatgpt.site)
+reports that status; [browser source](web/README.md) contains the local-ROM
+importer and verified WebAssembly port components. No game content is included.
+
 A new Pragmicat Windows release is not available yet. Build from this source using the instructions below. Once a validated release is published, download **Kingdom-Hearts-358-2-Days-Pragmicat-Mix.exe** from [Releases](https://github.com/pragmicat/kingdom-hearts-358-2-days-pragmicat-mix/releases) and open it. The launcher offers **Campaign** and **Combat Practice** for 358/2 Days, with the mod included.
 
 First setup finds your existing Days PC port and prepared game data, or asks you to select `khdays-native.exe` once. It makes a separate playable copy. After setup, open Pragmicat Mix directly. Campaign imports a copy of your existing progress once; the original installation stays unchanged.
@@ -45,6 +51,7 @@ For focused drills, use these practice options:
 
 | Goal | Setting |
 | --- | --- |
+| Fight replenishing Heartless through repeating ground, aerial and armored waves | **Target preset → Endless Heartless** |
 | Keep a target alive through longer ground or aerial chains | **Target durability → Extended combos (3x HP)** |
 | Practice defense across several encounters without a health refill | **HP recovery → On restart only** |
 | Repeat the same enemy group | **Encounter flow → Repeat current group** |
@@ -54,6 +61,13 @@ Durability applies to the next spawned group; it does not interrupt a current
 combo. On restart only carries damage across automatic next/repeat encounters.
 First entry, Restart, Next mixed group and defeat recovery still restore health.
 These training settings affect the separate practice arena.
+
+Endless Heartless refills individual defeated targets while survivors remain,
+then rotates groups without a final wave. Native notices and Encounter status
+track the wave and total cleared. At most three enemies are active; replacements
+do not heal the player. Restart begins a fresh run. See the
+[Endless practice guide](practice/ENDLESS.md). This is native PC practice source,
+not a mode in the original-game browser player.
 
 Light continues your normal ground or air chain. Technique changes with direction:
 
