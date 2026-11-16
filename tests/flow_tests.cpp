@@ -646,6 +646,45 @@ void signature_input_lock_keeps_its_deliberate_defense_request() {
     CHECK(player.defense_queued);CHECK(rxlimit::active(actor));
     close();tear_original(original_table);
 }
+void suppressed_signature_discards_old_intentions() {
+    for(auto kind : {rxlimit::Finisher::Rush,rxlimit::Finisher::LightBurst,rxlimit::Finisher::Flurry})
+    for(int entry=0;entry<4;++entry) {
+        reset();launch();build_player();CHECK(select_move(original_table,0,false));
+        CHECK(rxlimit::begin(actor,kind));CHECK(rxlimit::active(actor));
+        player.queued=player.committed=2;
+        player.queued_target.handle=player.committed_target.handle=9001;
+        player.jump_queued=player.defense_queued=player.resume_route=player.blend_pending=true;
+        player.pending_finisher=3;
+        put(original_table,0x47c,1);put(actor,0x1c,static_cast<std::uint16_t>(1));
+        blocked=1;put(actor,0x694,static_cast<unsigned char>(9));++pad_frame;
+        if(entry==0) {KhEvent event{};frame_event(&event,nullptr);}
+        else if(entry==1)sample_input(actor);
+        else if(entry==2)translate(actor);
+        else step(actor);
+        CHECK(player.queued==0&&player.committed==0);
+        CHECK(!player.queued_target.handle&&!player.committed_target.handle);
+        CHECK(!player.jump_queued&&!player.defense_queued&&!player.resume_route&&!player.blend_pending);
+        CHECK(player.pending_finisher==0&&hidden==0);
+        CHECK(get<int>(original_table,0x47c)==0&&get<std::uint16_t>(actor,0x1c)==0);
+        close();tear_original(original_table);
+    }
+}
+void suppressed_signature_refuses_taps_then_accepts_fresh_visible_input() {
+    for(auto kind : {rxlimit::Finisher::Rush,rxlimit::Finisher::LightBurst,rxlimit::Finisher::Flurry}) {
+        reset();launch();build_player();CHECK(select_move(original_table,0,false));
+        CHECK(rxlimit::begin(actor,kind));blocked=1;
+        put(actor,0x694,static_cast<unsigned char>(9));++pad_frame;
+        pad_pressed=KH_BUTTON_A|KH_BUTTON_X|KH_BUTTON_B|KH_BUTTON_Y|KH_BUTTON_SELECT;
+        pad_held=KH_BUTTON_A|KH_BUTTON_X;KhEvent event{};frame_event(&event,nullptr);
+        CHECK(requested_action()==0&&!player.jump_queued&&!player.defense_queued&&hidden==0);
+        CHECK(flow_stub::drive_requests==0);
+        put(actor,0x694,static_cast<unsigned char>(1));++pad_frame;pad_pressed=pad_held=0;
+        frame_event(&event,nullptr);CHECK(requested_action()==0&&!player.jump_queued&&!player.defense_queued);
+        ++pad_frame;pad_pressed=KH_BUTTON_Y;frame_event(&event,nullptr);
+        CHECK(player.defense_queued&&rxlimit::active(actor));
+        close();tear_original(original_table);
+    }
+}
 void frame_only_attack_tap_reaches_the_next_native_window(unsigned buttons) {
     reset();launch();build_player();CHECK(select_move(original_table,0,false));
     const KhRef rr=active_record();put(rr,0x10,10*4096);put(rr,0x14,20*4096);
@@ -943,6 +982,8 @@ int main() {
       {"hidden actor discards accepted and queued combat intentions",[]{test::forced_control_loss_discards_old_intentions(2);}},
       {"ordinary pause preserves accepted input while explicit menus cancel it",test::ordinary_pause_preserves_an_accepted_command_but_menu_open_cancels_it},
       {"native signature input lock still accepts deliberate defense",test::signature_input_lock_keeps_its_deliberate_defense_request},
+      {"suppressed signatures discard old intentions at every input entry",test::suppressed_signature_discards_old_intentions},
+      {"suppressed signatures refuse taps and accept fresh visible defense",test::suppressed_signature_refuses_taps_then_accepts_fresh_visible_input},
       {"frame-only Light tap reaches one native follow-up",[]{test::frame_only_attack_tap_reaches_the_next_native_window(KH_BUTTON_A);}},
       {"frame-only Technique tap reaches one native follow-up",[]{test::frame_only_attack_tap_reaches_the_next_native_window(KH_BUTTON_X);}},
       {"frame-only signature chord reaches one native finisher",[]{test::frame_only_attack_tap_reaches_the_next_native_window(KH_BUTTON_A|KH_BUTTON_X);}},

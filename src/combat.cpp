@@ -151,6 +151,11 @@ bool live_local_actor(KhRef actor) {
     const KhActor current = actors->player(0);
     return current != 0 && actors->ref(current) == actor;
 }
+bool visible_for_input(KhRef actor) {
+    // Apply the same enabled/suppression bits to ordinary and signature input.
+    // Exempting native signature pad locks must not bypass this visibility gate.
+    return (read<unsigned char>(actor, 0x694) & 9u) == 1u;
+}
 bool control_context_live(KhRef actor, bool ignore_input_lock = false) {
     if (stopping || !known_player(actor) || !live_local_actor(actor) || read<int>(scene_ctl, 8) != 2 ||
         (cinematic_flag && read<unsigned char>(cinematic_flag) != 0) || (!ignore_input_lock && input_blocked() != 0) ||
@@ -160,8 +165,7 @@ bool control_context_live(KhRef actor, bool ignore_input_lock = false) {
     // +0x694 bit 0 is the actor's visible/enabled flag. Some reconstructed
     // structs call it bSuppressDraw, but SetVisible and PlayEntityVoice establish
     // the actual polarity. Invisible scripted actors must never consume input.
-    const auto state = read<unsigned char>(actor, 0x694);
-    return (flags & blocked) == 0 && (state & 1) != 0 && (state & 8) == 0;
+    return (flags & blocked) == 0 && visible_for_input(actor);
 }
 bool controllable(KhRef actor) { return !paused && control_context_live(actor); }
 bool queue_live() {
@@ -183,7 +187,7 @@ bool finisher_context_live(KhRef actor) {
         !known_player(actor) || !live_local_actor(actor) || read<int>(scene_ctl, 8) != 2 ||
         (cinematic_flag && read<unsigned char>(cinematic_flag)) ||
         !read<std::uint16_t>(actor, 0x12)) return false;
-    return (read<unsigned char>(actor, 0x694) & 1u) != 0;
+    return visible_for_input(actor);
 }
 bool finisher_permitted(KhRef actor) { return !paused && finisher_context_live(actor); }
 

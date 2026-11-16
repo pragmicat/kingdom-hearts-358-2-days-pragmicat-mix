@@ -35,6 +35,14 @@ The 15 November 2026 source pass passed all **150 portable C++ cases** (49 flow,
 regressions failed before their fixes. Source whitespace and Python compilation
 checks also passed. These results do not certify a Windows release or game feel.
 
+The signature-input follow-up now passes **152 C++ cases** (51 flow) and the
+same **15 Lua groups**. Both new regressions failed before the fix. Ordinary
+and signature input now share the enabled/suppression gate: a script-suppressed
+Roxas discards old intentions and refuses fresh taps even during a native
+signature input lock. Rush, LightBurst and Flurry are covered through frame,
+sample, translate and step entry points; fresh visible defense remains allowed.
+Native gameplay and Windows validation remain outstanding.
+
 ## Reproduce validation
 
 Run from the repository root. Portable checks require Python and a C++20 compiler
