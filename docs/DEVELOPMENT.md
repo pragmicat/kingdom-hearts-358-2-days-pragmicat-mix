@@ -6,6 +6,14 @@ Source version is **0.3.3**, targeting Yokimitsuro's native Days PC port **0.1.5
 This source review branch omits artwork. Windows packaging needs its original
 artwork assets integrated, followed by a fresh build and validation.
 
+The aerial-input-generation follow-up passes **65 controller cases**. Accepted
+pursuit/Enemy Step records its original Jump deadline and generation. Execution
+consumes that request rather than a newer Jump or its intervening Light follow-up;
+older attacks still retire, and simultaneous Light stays buffered. Ordinary jump
+exits likewise capture their consumed request before calling native code. The
+newer-input regression failed before the fix. Native multi-tap aerial chaining
+and resulting animation connections still need controller validation.
+
 The Drive-resume follow-up passes **15 Drive cases**. The timer now excludes an
 interval beginning in pause or a cinematic, including a long gap before the
 resume callback. Previously that callback could consume the entire remaining

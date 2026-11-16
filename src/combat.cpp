@@ -132,6 +132,7 @@ struct Player {
     bool jump_queued = false;
     unsigned jump_until = 0;
     unsigned jump_intent = 0, motion_jump_intent = 0;
+    unsigned motion_jump_until = 0;
     unsigned hit_serial = 0;
     int hit_animation_frame = -1;
     bool resume_route = false;
@@ -639,16 +640,17 @@ void combo_exit(KhRef actor, bool preserve_route) {
     player.blend_pending = false;
     rxanim::reset(actor);
 }
-void mobility_consumed() {
+void mobility_consumed(unsigned consumed_until, unsigned consumed_intent) {
     player.committed = 0;
     player.committed_target = {};
     // Keep a new air attack pressed together with/after Jump, but discard an
     // older accepted attack which the deliberate movement replaced.
-    if (player.queued && static_cast<int>(player.queue_until - player.jump_until) < 0) {
+    // Compare with the consumed request, not a newer Jump received in recovery.
+    if (player.queued && (!queue_live() || static_cast<int>(player.queue_until - consumed_until) < 0)) {
         player.queued = 0;
         player.queued_target = {};
     }
-    player.jump_queued = false;
+    if (player.jump_intent == consumed_intent) player.jump_queued = false;
     player.defense_queued = false;
 }
 void defense_consumed() {
@@ -775,9 +777,14 @@ int step(KhRef actor) {
         if (jump_live && !requested) {
             if (hit.launcher) requested = rxmotion::request_chase(actor);
             else if ((read<unsigned>(table) & 4u) != 0) requested = rxmotion::request_enemy_step(actor);
-            if (requested) player.motion_jump_intent = player.jump_intent;
+            if (requested) {
+                player.motion_jump_intent = player.jump_intent;
+                player.motion_jump_until = player.jump_until;
+            }
         }
         if (requested && can_cancel) {
+            const unsigned consumed_until = player.motion_jump_until;
+            const unsigned consumed_intent = player.motion_jump_intent;
             const KhRef chase = rxmotion::step(actor);
             const auto remaining = rxmotion::snapshot();
             if (chase) {
@@ -787,7 +794,7 @@ int step(KhRef actor) {
                 if (actor == player.actor && controllable(actor) && remaining.actor == actor &&
                     remaining.attack_serial == hit.attack_serial) {
                     combo_exit(actor, true);
-                    mobility_consumed();
+                    mobility_consumed(consumed_until, consumed_intent);
                 }
                 return static_cast<int>(chase);
             }
@@ -801,13 +808,14 @@ int step(KhRef actor) {
         const bool held = (flags & (1ull << 36)) && (read<std::uint64_t>(actor, 0x464) & (1ull << 7));
         if (jump_live && can_cancel && !awaiting_rise && (read<unsigned>(actor, 0x24) & 4u) && !(flags & (1ull << 4)) && !held) {
             const int horizontal_x = read<int>(actor, 0x698), horizontal_z = read<int>(actor, 0x6a0);
+            const unsigned consumed_until = player.jump_until, consumed_intent = player.jump_intent;
             if (const int jumped = start_jump(actor, 0)) {
                 // Same native launch preparation and momentum retention as
                 // StepComboState's jump phase; no synthetic flight or invulnerability.
                 write<int>(actor, 0x698, horizontal_x);
                 write<int>(actor, 0x6a0, horizontal_z);
                 combo_exit(actor, true);
-                mobility_consumed();
+                mobility_consumed(consumed_until, consumed_intent);
                 return jumped;
             }
         }

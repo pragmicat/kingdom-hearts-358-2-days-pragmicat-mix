@@ -954,6 +954,42 @@ void retired_motion_queue_preserves_a_newer_frame_only_jump_tap() {
     CHECK(step(actor)==0x0200abcd);CHECK(flow_stub::step_requests==1&&!player.jump_queued);
     close();tear_original(original_table);
 }
+void accepted_motion_preserves_newer_jump_and_attack_on_execution() {
+    for(bool chase:{false,true}) {
+        reset();launch();build_player();CHECK(select_move(original_table,chase?0:1,false));
+        put(actor,0x7b0,6*4096);flow_stub::confirm(actor,player.active_move,pad_frame);
+        flow_stub::motion.launcher=chase;flow_stub::motion.launcher_confirmed=chase;
+        pad_pressed=KH_BUTTON_B;CHECK(step(actor)==0);
+        CHECK(chase?flow_stub::motion.chase_queued:flow_stub::motion.enemy_step_queued);
+        const auto accepted_intent=player.jump_intent;
+        ++pad_frame;pad_pressed=KH_BUTTON_A;KhEvent event{};frame_event(&event,nullptr);
+        player.queued_target.handle=9001;player.queued_target.identity[0]=1;
+        const auto attack_until=player.queue_until;
+        ++pad_frame;pad_pressed=KH_BUTTON_B;frame_event(&event,nullptr);
+        CHECK(player.jump_intent!=accepted_intent);const auto new_jump_until=player.jump_until;
+        pad_pressed=0;put(actor,0x7b0,7*4096);flow_stub::native_motion_return=0x0200abcd;
+        CHECK(step(actor)==0x0200abcd);
+        CHECK(player.jump_queued&&player.jump_until==new_jump_until);
+        CHECK(player.queued==1&&player.queue_until==attack_until&&player.queued_target.handle==9001);
+        CHECK(player.resume_route);
+        close();tear_original(original_table);
+    }
+}
+void accepted_motion_replaces_older_attacks_but_keeps_simultaneous_light() {
+    for(bool simultaneous:{false,true}) {
+        reset();launch();build_player();CHECK(select_move(original_table,1,false));
+        put(actor,0x7b0,6*4096);flow_stub::confirm(actor,player.active_move,pad_frame);
+        if(!simultaneous) {
+            pad_pressed=KH_BUTTON_A;KhEvent event{};frame_event(&event,nullptr);++pad_frame;
+        }
+        pad_pressed=KH_BUTTON_B|(simultaneous?KH_BUTTON_A:0);CHECK(step(actor)==0);
+        CHECK(flow_stub::motion.enemy_step_queued);
+        ++pad_frame;pad_pressed=0;put(actor,0x7b0,7*4096);flow_stub::native_motion_return=0x0200abcd;
+        CHECK(step(actor)==0x0200abcd);CHECK(!player.jump_queued);
+        CHECK(player.queued==(simultaneous?1:0));
+        close();tear_original(original_table);
+    }
+}
 void newly_accepted_motion_rejection_retires_its_original_jump_tap() {
     for(bool chase:{false,true}) {
         reset();launch();build_player();CHECK(select_move(original_table,chase?0:1,false));
@@ -1196,6 +1232,8 @@ int main() {
       {"replaced magic transition preserves new action intentions",test::replaced_magic_transition_keeps_new_action_intentions},
       {"retired motion queue cannot renew an old long Jump buffer",test::retired_motion_queue_cannot_reaccept_an_old_long_jump_buffer},
       {"retiring accepted motion preserves a newer frame-only Jump tap",test::retired_motion_queue_preserves_a_newer_frame_only_jump_tap},
+      {"executing accepted motion preserves newer Jump and Light followups",test::accepted_motion_preserves_newer_jump_and_attack_on_execution},
+      {"accepted motion retires older attacks and keeps simultaneous Light",test::accepted_motion_replaces_older_attacks_but_keeps_simultaneous_light},
       {"immediately rejected new motion cannot reuse its original Jump tap",test::newly_accepted_motion_rejection_retires_its_original_jump_tap},
       {"new chase acceptance preserves a waiting queue without renewed requests",test::newly_accepted_chase_waits_without_retiring_or_reaccepting_its_tap},
       {"a second defensive movement clears the saved attack route",test::a_second_defensive_movement_cannot_bank_the_old_combo_route},
