@@ -112,6 +112,9 @@ local function group_index()
   if mode.value == 4 then return 3 end
   return run.cycle
 end
+local function cleared_notice()
+  mod.notice("Clear. Next: " .. GROUP_NAMES[group_index()] .. ". Choose Restart encounter when ready.")
+end
 
 mod.option{
   key = "status", kind = "button", label = "Encounter status",
@@ -129,7 +132,7 @@ mod.option{
     elseif run.phase == "failed" then
       mod.notice("Practice needs a retry. Choose Restart encounter to try again.")
     elseif run.phase == "cleared" then
-      mod.notice("Clear. Next: " .. GROUP_NAMES[group_index()] .. ". Choose Restart encounter when ready.")
+      cleared_notice()
     elseif run.phase == "clearing" then
       mod.notice("Resetting practice. Waiting for the current targets to clear before replacing them.")
     elseif run.phase == "reset" then
@@ -213,6 +216,7 @@ mod.on("frame", function(e)
       if run.advanced_on_clear then run.cycle = run.cycle % 3 + 1 end
       if after_clear.value == 2 then
         run.phase, run.ticks = "cleared", 0
+        cleared_notice()
       else
         run.phase, run.ticks = "waiting", 90
       end

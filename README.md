@@ -29,7 +29,8 @@ on-demand help. With the Mixed preset, **Encounter flow** can repeat the current
 group for focused drills; **Next mixed group** skips to the next ground, aerial
 or armored group through a normal reset. Changes wait for play to resume and
 leave fixed target presets unchanged. Set **After clearing** to **Wait for Restart**
-to keep the arena empty between drills. **Restart encounter** starts the planned
+to keep the arena empty between drills. A short completion notice names the next
+group and reminds you to restart when ready. **Restart encounter** starts the planned
 group; **Next mixed group** starts that group or advances a repeating drill.
 Automatic encounters remain the default. See the [visible interface review](docs/UI_REVIEW.md) for the
 new pixel HUD preview and launcher layout work.

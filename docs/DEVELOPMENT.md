@@ -6,6 +6,14 @@ Source version is **0.3.3**, targeting Yokimitsuro's native Days PC port **0.1.5
 This source review branch omits artwork. Windows packaging needs its original
 artwork assets integrated, followed by a fresh build and validation.
 
+The practice-completion pass adds one native notice when a cleared drill enters
+**Wait for Restart**, naming the planned next group and the restart action. The
+same message remains available from Encounter status. Automatic encounters and
+manual resets stay quiet; pause/readiness guards defer the cue, and waiting does
+not repeat it. All **29 practice Lua groups** pass, covering every preset, repeat
+flow, pause, re-entry and scope release. Native notice placement/readability still
+needs an in-game capture; C++ combat behavior is unchanged by this pass.
+
 The aerial-input-generation follow-up passes **65 controller cases**. Accepted
 pursuit/Enemy Step records its original Jump deadline and generation. Execution
 consumes that request rather than a newer Jump or its intervening Light follow-up;
