@@ -269,8 +269,13 @@ KhRef try_magic_cancel(KhRef actor, bool contacts_finished) {
         get<signed char>(actor, 0x4dc) != 8) return 0;
     const unsigned spell = get<std::uint16_t>(actor, 0x4de);
     if (spell >= 15 || !slot_allowed(actor + 0x2288, spell)) return 0;
+    const KhActor requesting_owner = owner;
+    const unsigned requesting_serial = state.attack_serial;
     const KhRef result = try_request(actor, 0);
-    if (!result || !live(actor)) return result;
+    // Native spell callbacks may replace the attack or rebind the actor at the
+    // same address. Its new combo/resources must not receive outgoing cleanup.
+    if (!result || owner != requesting_owner || state.attack_serial != requesting_serial ||
+        !live(actor)) return result;
     // Same exit cleanup as the original melee state; no fabricated state number,
     // projectile, contact volume, damage, target or resource deduction.
     put<std::uint64_t>(actor, 0x46c, get<std::uint64_t>(actor, 0x46c) & ~(1ull << 4));

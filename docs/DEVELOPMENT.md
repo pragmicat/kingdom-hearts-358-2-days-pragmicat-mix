@@ -6,6 +6,14 @@ Source version is **0.3.3**, targeting Yokimitsuro's native Days PC port **0.1.5
 This source review branch omits artwork. Windows packaging needs its original
 artwork assets integrated, followed by a fresh build and validation.
 
+The magic-transition follow-up passes **63 controller cases** and **9 combat-rule
+cases**. Spell cancellation rechecks actor generation and attack identity after
+the native request, preserving a replacement action's combo, hit policy and
+buffered input. Ordinary accepted casts still save the route and retire outgoing
+melee intent; native spell consumption and return values are preserved. Both new
+regressions failed before the fix. Native melee-to-magic connections and spell
+selection on a controller remain unverified and should be captured next.
+
 The forced-signature follow-up passes **62 controller flow cases**. A forced
 native state now cancels a signature accepted during the current combo step,
 before native cleanup returns and starts it. Rush, Burst and Flurry are covered

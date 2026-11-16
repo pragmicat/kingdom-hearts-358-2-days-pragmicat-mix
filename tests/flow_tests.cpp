@@ -907,6 +907,17 @@ void replaced_motion_transition_keeps_new_action_intentions() {
     CHECK(flow_stub::anim_resets==resets);
     close();tear_original(original_table);
 }
+void replaced_magic_transition_keeps_new_action_intentions() {
+    reset();launch();build_player();CHECK(select_move(original_table,0,false));
+    put(actor,0x7b0,100*4096);flow_stub::native_magic_return=0x0200beef;
+    flow_stub::during_magic_request=[] {
+        ++flow_stub::motion.attack_serial;
+        player.committed=2;player.jump_queued=true;player.resume_route=false;
+    };
+    CHECK(step(actor)==0x0200beef);
+    CHECK(player.committed==2&&player.jump_queued&&!player.resume_route);
+    close();tear_original(original_table);
+}
 void retired_motion_queue_cannot_reaccept_an_old_long_jump_buffer() {
     for(bool chase:{false,true}) {
         reset();launch();build_player();CHECK(select_move(original_table,chase?0:1,false));
@@ -1182,6 +1193,7 @@ int main() {
       {"frame sampling keeps dedupe, expiry, pause and cinematic gates",test::frame_sampling_deduplicates_and_keeps_expiry_and_control_gates},
       {"accepted motion queue survives raw Jump expiry and consumes once",test::accepted_motion_queue_can_finish_after_raw_jump_expiry},
       {"replaced motion transition preserves new action intentions",test::replaced_motion_transition_keeps_new_action_intentions},
+      {"replaced magic transition preserves new action intentions",test::replaced_magic_transition_keeps_new_action_intentions},
       {"retired motion queue cannot renew an old long Jump buffer",test::retired_motion_queue_cannot_reaccept_an_old_long_jump_buffer},
       {"retiring accepted motion preserves a newer frame-only Jump tap",test::retired_motion_queue_preserves_a_newer_frame_only_jump_tap},
       {"immediately rejected new motion cannot reuse its original Jump tap",test::newly_accepted_motion_rejection_retires_its_original_jump_tap},

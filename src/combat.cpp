@@ -751,10 +751,17 @@ int step(KhRef actor) {
             return result;
         }
     }
+    const auto before_magic = rxmotion::snapshot();
     if (const KhRef magic = rxrules::try_magic_cancel(actor, can_cancel)) {
-        player.resume_route = true;
-        player.resume_until = input->frame() + 90;
-        clear_queue(); player.jump_queued = false;
+        const auto after_magic = rxmotion::snapshot();
+        // Keep input captured for a replacement action during the native cast.
+        // Ordinary casts still retire the outgoing melee intent and save its route.
+        if (actor == player.actor && live_local_actor(actor) && after_magic.actor == actor &&
+            after_magic.attack_serial == before_magic.attack_serial) {
+            player.resume_route = true;
+            player.resume_until = input->frame() + 90;
+            clear_queue(); player.jump_queued = false;
+        }
         return static_cast<int>(magic);
     }
     const bool jump_live = player.jump_queued && static_cast<int>(player.jump_until - input->frame()) >= 0;

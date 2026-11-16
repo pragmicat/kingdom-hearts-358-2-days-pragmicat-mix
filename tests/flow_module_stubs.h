@@ -25,6 +25,7 @@ inline unsigned rules_binds, rules_refreshes, rules_forgets, rules_starts, rules
 inline unsigned anim_links, anim_resets, drive_frames, drive_requests, drive_hits, hud_updates;
 inline KhRef native_motion_return, native_magic_return;
 inline void (*during_motion_step)();
+inline void (*during_magic_request)();
 inline bool request_allowed, magic_contacts_finished, replacing;
 inline bool motion_queue_rejected;
 inline bool hud_running, hud_visible;
@@ -44,6 +45,7 @@ inline void reset() {
     anim_links = anim_resets = drive_frames = drive_requests = drive_hits = hud_updates = 0;
     native_motion_return = native_magic_return = 0; request_allowed = true;
     during_motion_step = nullptr;
+    during_magic_request = nullptr;
     motion_queue_rejected = false;
     magic_contacts_finished = replacing = false;
     hud_running = hud_visible = false;
@@ -115,6 +117,7 @@ void before_native_hit(KhRef, KhRef, KhRef, void*) { ++flow_stub::policy_calls; 
 void on_confirmed_melee_hit(KhRef, KhActor, unsigned, unsigned, void*) { ++flow_stub::rules_hits; }
 KhRef try_magic_cancel(KhRef, bool finished) {
     flow_stub::magic_contacts_finished = finished;
+    if (finished && flow_stub::during_magic_request) flow_stub::during_magic_request();
     return finished ? flow_stub::native_magic_return : 0;
 }
 Snapshot snapshot() { return flow_stub::rules; }

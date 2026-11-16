@@ -16,6 +16,7 @@ std::map<std::string, void*> routines;
 KhActor owner = 1, target = 2;
 unsigned tick, guard_calls, dodge_calls, destroy_calls, request_calls, pair_calls, clear_calls, stores;
 bool permitted, loaded, slot_ok, cast_succeeds;
+void (*during_request)();
 int enemy_kind;
 std::array<int, 15> equipped{};
 std::string absent;
@@ -54,6 +55,7 @@ KhRef request(KhRef r, int n) {
     if (!cast_succeeds) return 0;
     const int spell = get<std::uint16_t>(actor, 0x4de);
     set_count(0, spell, count(0, spell) - 1); // mock the original cast's consumption
+    if (during_request) during_request();
     return 0x0200abcd;
 }
 void pair(KhRef r) { CHECK(r == actor); ++pair_calls; }
@@ -62,6 +64,7 @@ void reset() {
     rxrules::detach(); memory.fill(0); routines.clear(); tick = 100;
     guard_calls = dodge_calls = destroy_calls = request_calls = pair_calls = clear_calls = stores = 0;
     permitted = loaded = slot_ok = cast_succeeds = true; owner = 1; target = 2; enemy_kind = 0; absent.clear(); equipped.fill(1);
+    during_request = nullptr;
     api = {}; api.size = sizeof(api); api.pointer = &pointer; api.routine = &routine; api.datum = &datum;
     api.module_loaded = &module; api.frame = &frame;
     actor_api = {}; actor_api.size = sizeof(actor_api); actor_api.player = &player; actor_api.ref = &ref;
@@ -161,6 +164,18 @@ void charges_require_six_real_unique_melee_actions() {
     tick += 180; hit(40); CHECK(stores == 2 && count(0, 1) == 1);
     permitted = false; tick += 180; for (unsigned i = 41; i <= 48; ++i) hit(i); CHECK(stores == 2);
 }
+void replaced_magic_request_preserves_new_action_state() {
+    for (bool rebind : {false,true}) {
+        reset();attach();rxrules::attack_started(actor,1);
+        put(actor,0x1c,static_cast<std::uint16_t>(4));put(actor,0x4dc,static_cast<signed char>(8));
+        put(actor,0x4de,static_cast<std::uint16_t>(2));put(party,0xa0,static_cast<unsigned char>(2));
+        during_request=rebind ? +[] {owner=9;rxrules::bind(actor);rxrules::attack_started(actor,2);} :
+            +[] {rxrules::attack_started(actor,2,rxrules::Reaction::Carry);};
+        CHECK(rxrules::try_magic_cancel(actor,true)==0x0200abcd);
+        CHECK(count(0,2)==1 && request_calls==1); // retain the native cast and cost
+        CHECK(pair_calls==0 && clear_calls==0 && rxrules::snapshot().attack_serial==2);
+    }
+}
 void resource_caps_full_stocks_and_no_healing() {
     reset(); attach();
     for (int spell = 0; spell < 12; ++spell) put(party, 0x9c + spell * 2, static_cast<unsigned char>(3));
@@ -186,6 +201,7 @@ int main() {
         {"packet damage preservation and native immunity", test::native_packet_damage_and_immunity},
         {"bounded launch and one airborne carry", test::finite_launch_and_carry},
         {"native magic validation and charge consumption", test::magic_native_validation_and_consumption},
+        {"replacement magic callbacks preserve the new action", test::replaced_magic_request_preserves_new_action_state},
         {"six distinct confirmed melee actions per charge", test::charges_require_six_real_unique_melee_actions},
         {"resource caps, equipped spells and Cure exclusion", test::resource_caps_full_stocks_and_no_healing}
     };
