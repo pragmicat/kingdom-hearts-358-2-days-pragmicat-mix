@@ -60,8 +60,27 @@ end
 local mode = mod.option{
   key = "targets", kind = "choice", label = "Target preset", default = 1,
   values = { "Mixed encounters", "Single ground target", "Aerial targets", "Armored target" },
-  description = "Mixed cycles ground, aerial and armored encounters. Changing the preset restarts this encounter.",
+  description = "Mixed follows Encounter flow through ground, aerial and armored groups. Changing the preset restarts this encounter.",
   on_change = function() reset_requested = true end,
+}
+local flow = mod.option{
+  key = "flow", kind = "choice", label = "Encounter flow", default = 1,
+  values = { "Advance on clear", "Repeat current group" },
+  description = "Mixed preset only: advance after each clear, or repeat the current group for a focused drill. Changes apply at the next clear.",
+}
+mod.option{
+  key = "next_group", kind = "button", label = "Next mixed group",
+  description = "Mixed preset only: queue the next ground, aerial or armored group. Health and position reset when play resumes.",
+  on_change = function()
+    if not belongs_here() or run == nil then
+      mod.notice("Combat Practice is preparing or inactive. Wait for the arena to load.")
+    elseif mode.value ~= 1 then
+      mod.notice("Next mixed group: choose the Mixed encounters target preset first.")
+    else
+      run.cycle = run.cycle % 3 + 1
+      reset_requested = true
+    end
+  end,
 }
 mod.option{
   key = "restart", kind = "button", label = "Restart encounter",
@@ -95,7 +114,8 @@ mod.option{
     elseif reset_requested then
       mod.notice("Encounter reset queued. Practice will restart when play resumes.")
     elseif run.phase == "fighting" then
-      mod.notice(GROUP_NAMES[group_index()] .. ". Targets remaining: " .. #enemies.list() .. ".")
+      local repeating = mode.value == 1 and flow.value == 2 and " Repeating." or ""
+      mod.notice(GROUP_NAMES[group_index()] .. ". Targets remaining: " .. #enemies.list() .. "." .. repeating)
     elseif run.phase == "failed" then
       mod.notice("Practice needs a retry. Choose Restart encounter to try again.")
     elseif run.phase == "clearing" then
@@ -177,7 +197,7 @@ mod.on("frame", function(e)
   if reset_requested then reset_encounter() end
   if run.phase == "fighting" then
     if #enemies.list() == 0 then
-      run.cycle = run.cycle % 3 + 1
+      if mode.value == 1 and flow.value ~= 2 then run.cycle = run.cycle % 3 + 1 end
       run.phase, run.ticks = "waiting", 90
     end
     return

@@ -6,6 +6,13 @@ Source version is **0.3.3**, targeting Yokimitsuro's native Days PC port **0.1.5
 This source review branch omits artwork. Windows packaging needs its original
 artwork assets integrated, followed by a fresh build and validation.
 
+Latest practice flow adds a Mixed-preset repeat mode and a manual next-group
+action. Neither interrupts play when toggling repeat; skipping queues the
+existing guarded reset and preserves fixed presets and field ownership.
+All 24 practice Lua groups pass, including repetition, resumed progression,
+paused/manual skips, fixed presets and out-of-scope actors. Production C++ is
+unchanged from the visible UI pass; native gameplay remains unverified.
+
 ## Aim of each pass
 
 Improve responsive, fluid combat with clear inputs, connected native animations,
