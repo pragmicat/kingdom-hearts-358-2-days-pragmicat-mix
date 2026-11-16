@@ -28,7 +28,10 @@ Practice's Mods menu includes **Combat controls** and **Encounter status** for
 on-demand help. With the Mixed preset, **Encounter flow** can repeat the current
 group for focused drills; **Next mixed group** skips to the next ground, aerial
 or armored group through a normal reset. Changes wait for play to resume and
-leave fixed target presets unchanged. See the [visible interface review](docs/UI_REVIEW.md) for the
+leave fixed target presets unchanged. Set **After clearing** to **Wait for Restart**
+to keep the arena empty between drills. **Restart encounter** starts the planned
+group; **Next mixed group** starts that group or advances a repeating drill.
+Automatic encounters remain the default. See the [visible interface review](docs/UI_REVIEW.md) for the
 new pixel HUD preview and launcher layout work.
 
 Light continues your normal ground or air chain. Technique changes with direction:

@@ -6,6 +6,14 @@ Source version is **0.3.3**, targeting Yokimitsuro's native Days PC port **0.1.5
 This source review branch omits artwork. Windows packaging needs its original
 artwork assets integrated, followed by a fresh build and validation.
 
+Practice now offers **After clearing → Wait for Restart**. The optional break
+leaves the empty arena, health and position untouched until a manual reset;
+automatic encounters remain the default. Mixed groups advance once on clear,
+and Next starts the planned group without skipping twice. Repeat drills still
+support an explicit Next. Returning to automatic mode uses the normal delay.
+All **27 practice Lua groups** pass, including manual/automatic resume, pause,
+fixed presets and scope release. Native gameplay remains unverified.
+
 The practice flow pass adds a Mixed-preset repeat mode and a manual next-group
 action. Neither interrupts play when toggling repeat; skipping queues the
 existing guarded reset and preserves fixed presets and field ownership.

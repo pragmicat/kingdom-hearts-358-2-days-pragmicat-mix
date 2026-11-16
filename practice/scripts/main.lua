@@ -68,16 +68,26 @@ local flow = mod.option{
   values = { "Advance on clear", "Repeat current group" },
   description = "Mixed preset only: advance after each clear, or repeat the current group for a focused drill. Changes apply at the next clear.",
 }
+local after_clear = mod.option{
+  key = "after_clear", kind = "choice", label = "After clearing", default = 1,
+  values = { "Start next encounter", "Wait for Restart" },
+  description = "Start another encounter automatically, or leave the arena clear until Restart encounter. Switching back resumes the normal delay.",
+}
 mod.option{
   key = "next_group", kind = "button", label = "Next mixed group",
-  description = "Mixed preset only: queue the next ground, aerial or armored group. Health and position reset when play resumes.",
+  description = "Mixed preset only: queue the next group, or start the group already planned after a clear. Health and position reset when play resumes.",
   on_change = function()
     if not belongs_here() or run == nil then
       mod.notice("Combat Practice is preparing or inactive. Wait for the arena to load.")
     elseif mode.value ~= 1 then
       mod.notice("Next mixed group: choose the Mixed encounters target preset first.")
     else
-      run.cycle = run.cycle % 3 + 1
+      -- A clear may already have advanced the planned group. Starting it must
+      -- not skip another group; repeat mode still allows an explicit skip.
+      if run.phase ~= "cleared" or not run.advanced_on_clear then
+        run.cycle = run.cycle % 3 + 1
+      end
+      run.advanced_on_clear = false
       reset_requested = true
     end
   end,
@@ -118,6 +128,8 @@ mod.option{
       mod.notice(GROUP_NAMES[group_index()] .. ". Targets remaining: " .. #enemies.list() .. "." .. repeating)
     elseif run.phase == "failed" then
       mod.notice("Practice needs a retry. Choose Restart encounter to try again.")
+    elseif run.phase == "cleared" then
+      mod.notice("Clear. Next: " .. GROUP_NAMES[group_index()] .. ". Choose Restart encounter when ready.")
     elseif run.phase == "clearing" then
       mod.notice("Resetting practice. Waiting for the current targets to clear before replacing them.")
     elseif run.phase == "reset" then
@@ -197,12 +209,21 @@ mod.on("frame", function(e)
   if reset_requested then reset_encounter() end
   if run.phase == "fighting" then
     if #enemies.list() == 0 then
-      if mode.value == 1 and flow.value ~= 2 then run.cycle = run.cycle % 3 + 1 end
-      run.phase, run.ticks = "waiting", 90
+      run.advanced_on_clear = mode.value == 1 and flow.value ~= 2
+      if run.advanced_on_clear then run.cycle = run.cycle % 3 + 1 end
+      if after_clear.value == 2 then
+        run.phase, run.ticks = "cleared", 0
+      else
+        run.phase, run.ticks = "waiting", 90
+      end
     end
     return
   end
   if run.phase == "failed" then return end
+  if run.phase == "cleared" then
+    if after_clear.value ~= 2 then run.phase, run.ticks = "waiting", 90 end
+    return
+  end
   if run.ticks > 0 then run.ticks = run.ticks - 1; return end
   if run.phase == "clearing" then clear_encounter(); return end
   if run.phase == "reset" then

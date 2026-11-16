@@ -254,5 +254,45 @@ test('mixed flow actions preserve fixed presets and out of scope actors',functio
   c.step(60); c.env.mission.id=1; c.live={999}; c.options.next_group.on_change()
   c.step(110); assert(#c.live==1 and c.live[1]==999 and #c.made==3 and not c.holds)
 end)
+test('optional clear arena waits without healing and restarts the planned drill',function()
+  for _,repeat_group in ipairs({false,true}) do
+    local c=boot(); assert(c.options.after_clear.value==1)
+    c.options.after_clear.value=2; c.options.flow.value=repeat_group and 2 or 1
+    c.step(60); c.hp=37; local heals=c.heals
+    c.clear(); c.step(1000)
+    assert(#c.live==0 and #c.made==3 and c.hp==37 and c.heals==heals and not c.recentred)
+    assert(c.notices==0 and c.holds and c.held_defeat)
+    c.options.status.on_change()
+    assert(c.last_notice:find('Restart encounter',1,true) and #c.last_notice<=100)
+    assert(c.last_notice:find(repeat_group and 'Ground' or 'Aerial',1,true))
+    c.reset(); c.step(110)
+    assert(#c.live==(repeat_group and 3 or 2) and c.hp==100 and c.recentred)
+    assert(c.made[#c.made].kind==(repeat_group and 0 or 1))
+  end
+end)
+test('clear arena next action and automatic resume preserve the next group and delay',function()
+  for _,repeat_group in ipairs({false,true}) do
+    local c=boot(); c.options.after_clear.value=2; c.options.flow.value=repeat_group and 2 or 1
+    c.step(60); c.clear(); c.step(1)
+    c.options.next_group.on_change(); c.step(300,true)
+    assert(#c.live==0 and #c.made==3 and not c.recentred)
+    c.step(110); assert(#c.live==2 and #c.made==5 and c.made[5].kind==1)
+  end
+  local c=boot(); c.options.after_clear.value=2; c.step(60); c.clear(); c.step(300)
+  c.options.after_clear.value=1; c.step(300,true); assert(#c.made==3)
+  c.step(1); c.step(90); assert(#c.live==0 and #c.made==3)
+  c.step(1); assert(#c.live==2 and c.made[#c.made].kind==1)
+end)
+test('clear arena preserves fixed drills and releases ownership on a scope change',function()
+  for _,preset in ipairs({2,3,4}) do
+    local c=boot(); c.options.after_clear.value=2; c.choose(preset); c.step(110)
+    local count=#c.made; c.clear(); c.step(500); assert(#c.made==count and #c.live==0)
+    c.reset(); c.step(110)
+    assert(c.made[#c.made].kind==({4,1,41})[preset-1] and c.recentred)
+  end
+  local c=boot(); c.options.after_clear.value=2; c.step(60); c.clear(); c.step(1)
+  c.env.mission.id=1; c.live={999}; c.step(300)
+  assert(not c.holds and not c.held_defeat and #c.made==3 and c.live[1]==999)
+end)
 print(('%d/%d practice Lua groups passed'):format(groups,groups))
 ''')
