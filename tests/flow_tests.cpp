@@ -433,6 +433,33 @@ void finisher_waits_for_native_transition_return_and_keeps_state_ref() {
     during_step=[] {next_a(original_table);};CHECK(step(actor)==step_result);CHECK(!rxlimit::active());during_step={};
     close();tear_original(original_table);
 }
+void forced_native_states_cancel_a_signature_waiting_for_transition_cleanup() {
+    for (auto action : {rxroutes::Action::Rush,rxroutes::Action::Burst,rxroutes::Action::Flurry})
+    for (int forced : {13,16,20,31}) {
+        reset();launch();build_player();CHECK(select_move(original_table,0,false));
+        player.queued=static_cast<int>(action);player.queue_until=pad_frame+12;pad_pressed=0;
+        during_step=[forced] {
+            next_a(original_table);CHECK(player.pending_finisher!=0);
+            change_state(actor,forced);
+            CHECK(player.pending_finisher==0);
+        };
+        CHECK(step(actor)==0);CHECK(!rxlimit::active(actor));
+        during_step={};++pad_frame;CHECK(step(actor)==0);CHECK(!rxlimit::active(actor));
+        close();tear_original(original_table);
+    }
+}
+void ordinary_native_melee_states_preserve_a_signature_waiting_for_cleanup() {
+    for (int native : {14,15,22}) {
+        reset();launch();build_player();CHECK(select_move(original_table,0,false));
+        player.queued=static_cast<int>(rxroutes::Action::Rush);player.queue_until=pad_frame+12;pad_pressed=0;
+        during_step=[native] {
+            next_a(original_table);CHECK(player.pending_finisher!=0);
+            change_state(actor,native);CHECK(player.pending_finisher!=0);
+        };
+        CHECK(step(actor)==0x02000000+34*4);CHECK(rxlimit::active(actor));
+        during_step={};close();tear_original(original_table);
+    }
+}
 void default_routes_cover_all_stock_attack_clips() {
     reset();launch();build_player();std::set<int> tags;
     for(int group=0;group<2;++group) {
@@ -1120,6 +1147,8 @@ int main() {
       {"temporary movement boost never compounds or overrides a state change",test::movement_boost_is_temporary_and_respects_state_change},
       {"defense waits for contacts, expiry, ground and native abilities",test::defense_preserves_contacts_and_requires_native_abilities},
       {"regular finisher follows original transition and preserves state reference",test::finisher_waits_for_native_transition_return_and_keeps_state_ref},
+      {"forced native states cancel a signature waiting for cleanup",test::forced_native_states_cancel_a_signature_waiting_for_transition_cleanup},
+      {"ordinary melee states preserve a signature waiting for cleanup",test::ordinary_native_melee_states_preserve_a_signature_waiting_for_cleanup},
       {"default normal routes reach all sixteen stock attack clips",test::default_routes_cover_all_stock_attack_clips},
       {"stale SDK actor is refused and stop leaves retired actor memory alone",test::stale_sdk_actor_is_not_controlled_or_dereferenced_on_stop},
       {"target-relative directions and deliberately chosen signature chords",test::semantic_directions_and_signature_chords_are_stable},

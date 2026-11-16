@@ -6,6 +6,13 @@ Source version is **0.3.3**, targeting Yokimitsuro's native Days PC port **0.1.5
 This source review branch omits artwork. Windows packaging needs its original
 artwork assets integrated, followed by a fresh build and validation.
 
+The forced-signature follow-up passes **62 controller flow cases**. A forced
+native state now cancels a signature accepted during the current combo step,
+before native cleanup returns and starts it. Rush, Burst and Flurry are covered
+across forced states 13/16/20/31; normal melee states 14/15/22 still preserve the
+pending signature. The interruption regression failed before the fix. Native
+damage/forced-action playback remains unverified and should be captured next.
+
 The crowd-contact follow-up passes **30 motion cases**. Pursuit, Enemy Step and
 launcher-rise confirmation now use the last hit on their chosen target, rather
 than the latest hit anywhere in a sweep. Unrelated crowd contacts cannot revive

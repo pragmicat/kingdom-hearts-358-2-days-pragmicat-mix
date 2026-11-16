@@ -227,6 +227,9 @@ int change_state(KhRef actor, int state) {
     if (actor == player.actor && state >= 13 && state <= 31 &&
         state != 14 && state != 15 && state != 22) {
         clear_queue();
+        // next() may have accepted a signature inside the current native step.
+        // A forced action wins before that step returns and starts the signature.
+        player.pending_finisher = 0;
         player.resume_route = false;
         player.jump_queued = false;
         player.defense_queued = false;
