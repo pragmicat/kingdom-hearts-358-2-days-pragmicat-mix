@@ -6,6 +6,14 @@ Source version is **0.3.3**, targeting Yokimitsuro's native Days PC port **0.1.5
 This source review branch omits artwork. Windows packaging needs its original
 artwork assets integrated, followed by a fresh build and validation.
 
+The Drive-resume follow-up passes **15 Drive cases**. The timer now excludes an
+interval beginning in pause or a cinematic, including a long gap before the
+resume callback. Previously that callback could consume the entire remaining
+form duration. Active combat/recovery still spends time, duplicate samples do
+not, and expiry still waits for safe restoration. The new regression failed
+before the fix; the existing pause case now protects the resume boundary too.
+Configured duration is unchanged. Native pause/cinematic playback needs review.
+
 The magic-transition follow-up passes **63 controller cases** and **9 combat-rule
 cases**. Spell cancellation rechecks actor generation and attack identity after
 the native request, preserving a replacement action's combo, hit policy and

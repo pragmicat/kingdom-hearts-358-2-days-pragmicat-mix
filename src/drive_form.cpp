@@ -494,7 +494,10 @@ bool prime_practice_meter(KhRef actor) {
 }
 void frame(const FrameContext& context) {
     if (!initialized || replacing || !engine->on_game_thread()) return;
-    const unsigned delta = last_tick ? context.tick - last_tick : 0;
+    // The interval begins at the previous sample. A paused/cinematic sample
+    // cannot become active play time merely because the next callback resumes.
+    const bool was_suspended = last_context.paused || last_context.cinematic;
+    const unsigned delta = last_tick && !was_suspended ? context.tick - last_tick : 0;
     last_tick = context.tick;
     last_context = context;
     if (state.phase == Phase::Faulted) return;

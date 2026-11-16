@@ -341,10 +341,23 @@ void test_pause_expiry() {
     REQUIRE(rxdrive::view().remaining_ticks==900);
     auto cinema=context(2001);cinema.cinematic=true;rxdrive::frame(cinema);
     REQUIRE(rxdrive::view().remaining_ticks==900);
-    rxdrive::frame(context(2002));REQUIRE(rxdrive::view().remaining_ticks==899);
-    rxdrive::frame(context(2901,false));REQUIRE(rxdrive::view().phase==rxdrive::Phase::RestorationQueued);
+    rxdrive::frame(context(2002));REQUIRE(rxdrive::view().remaining_ticks==900);
+    rxdrive::frame(context(2902,false));REQUIRE(rxdrive::view().phase==rxdrive::Phase::RestorationQueued);
     REQUIRE(get<int>(current_actor(),0xc)==19);
-    rxdrive::frame(context(2902));REQUIRE(get<int>(current_actor(),0xc)==0);
+    rxdrive::frame(context(2903));REQUIRE(get<int>(current_actor(),0xc)==0);
+}
+void test_resume_does_not_charge_a_suspended_frame_gap() {
+    for (bool cinematic : {false,true}) {
+        setup();charge();REQUIRE(rxdrive::request_activation());rxdrive::frame(context(101));
+        auto suspended=context(110);suspended.paused=!cinematic;suspended.cinematic=cinematic;
+        rxdrive::frame(suspended);const auto remaining=rxdrive::view().remaining_ticks;
+        rxdrive::frame(context(2000));
+        REQUIRE(rxdrive::view().phase==rxdrive::Phase::Active);
+        REQUIRE(rxdrive::view().remaining_ticks==remaining);
+        auto combat=context(2010,false);combat.controllable=false;rxdrive::frame(combat);
+        REQUIRE(rxdrive::view().remaining_ticks==remaining-10); // hit recovery still spends time
+        rxdrive::frame(combat);REQUIRE(rxdrive::view().remaining_ticks==remaining-10); // same frame once
+    }
 }
 void test_room_membership_roundtrip() {
     setup();charge();REQUIRE(rxdrive::request_activation());rxdrive::frame(context(101));
@@ -549,6 +562,7 @@ int main() {
     struct Case{const char*name;void(*test)();};
     const Case cases[]={{"charge-dedup-cap-and-coop",test_charge},{"native-model-class-roundtrip-preserves-state",test_native_roundtrip},
         {"pause-cinematic-timer-and-safe-expiry",test_pause_expiry},{"veto-overlay-capacity-fails-before-destroy",test_veto_and_overlay_full},
+        {"resume-excludes-paused-and-cinematic-frame-gaps",test_resume_does_not_charge_a_suspended_frame_gap},
         {"activation-and-restoration-rollback",test_rollback},{"reserved-overlay-release-before-party-unload",test_party_unload},
         {"stale-actor-and-mission-mode-refused",test_stale_and_scripted},
         {"equipped-idle-magic-allowed-live-projectiles-deferred",test_owned_magic_quiescence},
