@@ -24,6 +24,10 @@ First setup finds your existing Days PC port and prepared game data, or asks you
 
 Directions are relative to the target. Signature directions select rush (toward), burst (away), or flurry (neutral/side). Rebind the underlying buttons in the game's Settings. Mod options control speed, buffering, Drive duration, and its display.
 
+Practice's Mods menu includes **Combat controls** and **Encounter status** for
+on-demand help. See the [visible interface review](docs/UI_REVIEW.md) for the
+new pixel HUD preview and launcher layout work.
+
 Light continues your normal ground or air chain. Technique changes with direction:
 
 | Direction | Ground Technique | Air Technique |

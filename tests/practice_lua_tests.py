@@ -8,7 +8,7 @@ runtime.globals().SOURCE = (ROOT / 'practice/scripts/main.lua').read_text(encodi
 runtime.execute(r'''
 local function boot()
   local c = { live = {}, made = {}, options = {}, reads = {}, holds = false, held_defeat = false,
-              hp = 100, kind = 0, ready = true, actor = true, loaded = {}, notices = 0, heals = 0 }
+              hp = 100, kind = 0, ready = true, actor = true, loaded = {}, notices = 0, heals = 0, messages = {} }
   local handlers, next_id = {}, 0
   local addresses = { [0x0204c242] = 20000, [0x0204c240] = 0, [0x0204c228] = 0,
                       [0x020b2e7c] = 0x20000000, [0x20000004] = 0x20001000,
@@ -23,7 +23,7 @@ local function boot()
     memory = {u8=read,u16=read,u32=read,s32=read,loaded=function(id) return c.loaded[id] ~= false end},
     mod = { on=function(name,f) handlers[name]=f end,
             option=function(o) o.value=o.default; c.options[o.key]=o; return o end,
-            notice=function(message) c.notices=c.notices+1; c.last_notice=message end },
+            notice=function(message) c.notices=c.notices+1; c.last_notice=message; c.messages[#c.messages+1]=message end },
     player = { max_hp=100, position=function() if c.actor then return 0,.049,0 end end,
       set_hp=function(hp) if c.no_gauge then return nil,'not now' end; c.hp=hp; c.heals=c.heals+1; return true end,
       set_position=function(x,y,z) assert(x==0 and y==.049 and z==0); c.recentred=true; return not c.no_place end,
@@ -154,7 +154,7 @@ test('persistent reset refusal stops once and manual retry can recover',function
   assert(c.last_notice:find('Restart encounter',1,true))
   local stopped=attempts; c.step(2000); assert(attempts==stopped and c.notices==1)
   c.env.enemies.remove=remove; c.reset(); c.step(200)
-  assert(#c.live==3 and #c.made==6 and c.recentred and c.notices==1)
+  assert(#c.live==3 and #c.made==6 and c.recentred and c.notices==2 and c.last_notice:find('recovered',1,true))
 end)
 test('pending reset retries respect pause readiness and field ownership',function()
   for _,gate in ipairs({'pause','actor','resources','position','scope'}) do
@@ -174,6 +174,51 @@ test('pending reset retries respect pause readiness and field ownership',functio
       c.step(200); assert(#c.live==3 and #c.made==6 and c.recentred)
     end
   end
+end)
+test('combat controls are on demand complete and leave the arena unchanged',function()
+  local c=boot(); c.step(60)
+  assert(c.options.controls and c.options.controls.kind=='button')
+  for _,text in ipairs({'Attack','X','Jump','Defense','Select','game mapping'}) do
+    assert(c.options.controls.description:find(text,1,true),text)
+  end
+  assert(c.notices==0)
+  local before_made,before_heals=#c.made,c.heals
+  local pages={}
+  for i=1,4 do
+    c.options.controls.on_change()
+    assert(c.notices==i and #c.live==3 and #c.made==before_made and c.heals==before_heals)
+    assert(#c.last_notice<=100 and not c.last_notice:find('[\r\n]'))
+    assert(not c.last_notice:find('[^ -~]')) -- short ASCII lines fit native timed notices
+    pages[#pages+1]=c.last_notice
+  end
+  local guide=table.concat(pages,'\n')
+  for _,text in ipairs({'Light','Technique','target','Rush','Burst','Flurry','Jump','Enemy Step','Defense','Select','Magic'}) do
+    assert(guide:find(text,1,true),text)
+  end
+  assert(guide:find('rises',1,true) and guide:find('airborne',1,true))
+  c.options.controls.on_change(); assert(c.last_notice==pages[1])
+  c.step(200); assert(c.notices==5) -- no automatic help or frame spam
+end)
+test('encounter status reports current phase and preset without changing play',function()
+  local c=boot(); assert(c.options.status and c.options.status.kind=='button')
+  c.options.status.on_change(); assert(c.last_notice:find('preparing',1,true))
+  c.step(60); local made,heals=#c.made,c.heals
+  c.options.status.on_change()
+  assert(c.last_notice:find('Ground',1,true) and c.last_notice:find('3',1,true))
+  assert(#c.made==made and c.heals==heals and #c.live==3)
+  c.choose(3); c.options.status.on_change(); assert(c.last_notice:find('queued',1,true))
+  c.step(110); c.options.status.on_change(); assert(c.last_notice:find('Aerial',1,true))
+  c.env.mission.id=1; c.options.status.on_change(); assert(c.last_notice:find('inactive',1,true))
+  c.step(1); assert(not c.holds and not c.held_defeat and #c.live==2)
+end)
+test('failure recovery is announced once after targets are genuinely ready',function()
+  local c=boot(); c.ready=false; c.step(1100); assert(c.notices==1)
+  c.options.status.on_change(); assert(c.last_notice:find('Restart encounter',1,true))
+  c.reset(); c.step(200); assert(#c.live==0 and c.notices==2)
+  c.ready=true; c.step(200)
+  assert(#c.live==3 and c.notices==3 and c.last_notice:find('recovered',1,true))
+  c.step(400); assert(c.notices==3)
+  c.clear(); c.step(110); assert(#c.live==2 and c.notices==3)
 end)
 print(('%d/%d practice Lua groups passed'):format(groups,groups))
 ''')

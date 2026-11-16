@@ -1,5 +1,6 @@
 #include "setup.h"
 #include "version.h"
+#include "layout.h"
 #include <commctrl.h>
 #include <ole2.h>
 #include <gdiplus.h>
@@ -53,19 +54,79 @@ HBITMAP logo_bitmap(int width, int height) {
 struct Completion { std::wstring message; fs::path game; bool error = false, discovery = false; };
 struct App {
     HWND window = nullptr, campaign = nullptr, practice = nullptr, browse = nullptr, status = nullptr, progress = nullptr;
+    HWND logo_control = nullptr, heading_control = nullptr, intro = nullptr, version = nullptr, restore_focus = nullptr;
     HFONT regular = nullptr, heading = nullptr;
     HBITMAP logo = nullptr;
+    int font_pixels = 0, logo_width = 0, logo_height = 0, default_id = 10;
     HBRUSH background = CreateSolidBrush(RGB(247, 248, 250));
     Options options;
     fs::path own_folder;
     std::thread worker;
     bool busy = false;
+    bool compact_title = false;
     ~App() { if (worker.joinable()) worker.join(); if (regular) DeleteObject(regular); if (heading) DeleteObject(heading); if (logo) DeleteObject(logo); DeleteObject(background); }
+    void focus_action() {
+        if (busy || GetForegroundWindow() != window) return;
+        const HWND current=GetFocus();
+        if(current && current!=window && IsChild(window,current) && IsWindowEnabled(current))return;
+        const HWND target = restore_focus && IsWindow(restore_focus) && IsWindowEnabled(restore_focus) ? restore_focus : campaign;
+        if (target) SetFocus(target);
+    }
+    void layout() {
+        if(!campaign)return;
+        RECT client{}; if (!GetClientRect(window, &client)) return;
+        const auto positions = ui::calculate(client.right, client.bottom, GetDpiForWindow(window));
+        if (!positions.valid) return;
+        const int pixels = std::max(10, static_cast<int>(std::lround(44.0F / 3 * positions.scale)));
+        const bool short_title=positions.heading.height < static_cast<int>(std::lround(56 * positions.scale));
+        if(short_title!=compact_title) {
+            SetWindowTextW(heading_control,short_title?L"358/2 Days: Pragmicat Mix":L"Kingdom Hearts 358/2 Days\nPragmicat Mix");
+            compact_title=short_title;
+        }
+        if (pixels != font_pixels) {
+            HFONT next = CreateFontW(-pixels,0,0,0,FW_NORMAL,FALSE,FALSE,FALSE,DEFAULT_CHARSET,
+                OUT_DEFAULT_PRECIS,CLIP_DEFAULT_PRECIS,CLEARTYPE_QUALITY,DEFAULT_PITCH,L"Segoe UI");
+            HFONT next_heading = CreateFontW(-std::max(14, static_cast<int>(std::lround(80.0F / 3 * positions.scale))),0,0,0,
+                FW_SEMIBOLD,FALSE,FALSE,FALSE,DEFAULT_CHARSET,OUT_DEFAULT_PRECIS,CLIP_DEFAULT_PRECIS,
+                CLEARTYPE_QUALITY,DEFAULT_PITCH,L"Segoe UI");
+            if (next && next_heading) {
+                for (HWND control : {campaign,practice,browse,status,intro,version}) SendMessageW(control,WM_SETFONT,reinterpret_cast<WPARAM>(next),TRUE);
+                SendMessageW(heading_control,WM_SETFONT,reinterpret_cast<WPARAM>(next_heading),TRUE);
+                if (regular) DeleteObject(regular); if (heading) DeleteObject(heading);
+                regular=next; heading=next_heading; font_pixels=pixels;
+            } else { if(next)DeleteObject(next); if(next_heading)DeleteObject(next_heading); }
+        }
+        const auto move = [](HWND control,ui::Rect area) { MoveWindow(control,area.x,area.y,area.width,area.height,TRUE); };
+        move(heading_control,positions.heading); move(intro,positions.intro);
+        move(campaign,positions.campaign); move(practice,positions.practice);
+        move(status,positions.status); move(progress,positions.progress);
+        move(browse,positions.browse); move(version,positions.version);
+        if (positions.show_logo) {
+            move(logo_control,positions.logo);
+            if (logo_width!=positions.logo.width || logo_height!=positions.logo.height) {
+                HBITMAP next=logo_bitmap(positions.logo.width,positions.logo.height);
+                SendMessageW(logo_control,STM_SETIMAGE,IMAGE_BITMAP,reinterpret_cast<LPARAM>(next));
+                if(logo)DeleteObject(logo); logo=next;
+                logo_width=positions.logo.width; logo_height=positions.logo.height;
+            }
+        } else {
+            SendMessageW(logo_control,STM_SETIMAGE,IMAGE_BITMAP,0);
+            if(logo)DeleteObject(logo); logo=nullptr; logo_width=logo_height=0;
+        }
+        ShowWindow(logo_control,positions.show_logo&&logo?SW_SHOW:SW_HIDE);
+        ShowWindow(heading_control,positions.show_logo&&logo?SW_HIDE:SW_SHOW);
+        ShowWindow(progress,busy?SW_SHOW:SW_HIDE);
+    }
     void set_busy(bool value) {
+        if (value) {
+            const HWND focused=GetFocus();
+            if(focused==campaign || focused==practice || focused==browse)restore_focus=focused;
+        }
         busy = value;
         for (const auto control : {campaign, practice, browse}) EnableWindow(control, !value);
         SendMessageW(progress, PBM_SETMARQUEE, value ? TRUE : FALSE, 30);
         ShowWindow(progress, value ? SW_SHOW : SW_HIDE);
+        if(!value)focus_action();
     }
     void send_progress(const std::wstring& text) {
         auto message = std::make_unique<std::wstring>(text);
@@ -125,36 +186,67 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
     if (!app) return DefWindowProcW(window, message, wparam, lparam);
     switch (message) {
     case WM_CREATE: {
-        const UINT dpi = GetDpiForWindow(window);
-        const auto scale = [dpi](int value) { return MulDiv(value, static_cast<int>(dpi), 96); };
-        app->regular = CreateFontW(-MulDiv(11, static_cast<int>(dpi), 72), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Segoe UI");
-        app->heading = CreateFontW(-MulDiv(20, static_cast<int>(dpi), 72), 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Segoe UI");
-        const auto make = [&](const wchar_t* type, const wchar_t* text, DWORD style, int x, int y, int width, int height, int id) {
-            HWND control = CreateWindowExW(0, type, text, WS_CHILD | WS_VISIBLE | style, scale(x), scale(y), scale(width), scale(height), window, reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)), GetModuleHandleW(nullptr), nullptr);
-            SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(app->regular), TRUE); return control;
+        const auto make = [&](const wchar_t* type, const wchar_t* text, DWORD style, int id) {
+            return CreateWindowExW(0,type,text,WS_CHILD|WS_VISIBLE|style,0,0,1,1,window,
+                reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)),GetModuleHandleW(nullptr),nullptr);
         };
-        app->logo = logo_bitmap(scale(400), scale(288));
-        if (app->logo) {
-            const auto logo = make(L"STATIC", L"Kingdom Hearts 358/2 Days: Pragmicat Mix", SS_BITMAP | SS_CENTERIMAGE, 120, 4, 400, 288, 0);
-            SendMessageW(logo, STM_SETIMAGE, IMAGE_BITMAP, reinterpret_cast<LPARAM>(app->logo));
-        } else {
-            const auto heading = make(L"STATIC", L"Kingdom Hearts 358/2 Days\nPragmicat Mix", SS_CENTER, 32, 90, 576, 90, 0);
-            SendMessageW(heading, WM_SETFONT, reinterpret_cast<WPARAM>(app->heading), TRUE);
+        app->logo_control=make(L"STATIC",L"",SS_BITMAP|SS_CENTERIMAGE,0);
+        app->heading_control=make(L"STATIC",L"Kingdom Hearts 358/2 Days\nPragmicat Mix",SS_CENTER,0);
+        app->intro=make(L"STATIC",L"Campaign and combat practice.\nOne-time setup imports your Days game; progress stays separate.",SS_LEFT,0);
+        app->campaign=make(L"BUTTON",L"Play Campaign",BS_DEFPUSHBUTTON|WS_TABSTOP,10);
+        app->practice=make(L"BUTTON",L"Combat Practice",BS_PUSHBUTTON|WS_TABSTOP,11);
+        app->status=make(L"EDIT",L"",ES_MULTILINE|ES_READONLY|ES_AUTOVSCROLL|WS_VSCROLL|WS_TABSTOP,0);
+        app->progress=make(PROGRESS_CLASSW,L"",PBS_MARQUEE,0);
+        app->browse=make(L"BUTTON",L"Choose Days game...",BS_PUSHBUTTON|WS_TABSTOP,12);
+        const auto label=L"Pragmicat Mix "+wide(PRAGMICAT_VERSION_STRING)+L"  |  Days port 0.1.5";
+        app->version=make(L"STATIC",label.c_str(),SS_RIGHT,0);
+        app->layout(); app->start(false,true); return 0;
+    }
+    case WM_SIZE: app->layout(); return 0;
+    case WM_SETFOCUS: app->focus_action(); return 0;
+    case WM_DPICHANGED: {
+        const auto* suggested=reinterpret_cast<const RECT*>(lparam);
+        RECT fitted=*suggested; MONITORINFO monitor{sizeof(monitor)};
+        if(GetMonitorInfoW(MonitorFromRect(suggested,MONITOR_DEFAULTTONEAREST),&monitor)) {
+            const int width=std::min(fitted.right-fitted.left,monitor.rcWork.right-monitor.rcWork.left);
+            const int height=std::min(fitted.bottom-fitted.top,monitor.rcWork.bottom-monitor.rcWork.top);
+            fitted.left=std::clamp(fitted.left,monitor.rcWork.left,monitor.rcWork.right-width);
+            fitted.top=std::clamp(fitted.top,monitor.rcWork.top,monitor.rcWork.bottom-height);
+            fitted.right=fitted.left+width; fitted.bottom=fitted.top+height;
         }
-        make(L"STATIC", L"Kingdom Hearts 358/2 Days: campaign and combat practice.\nOne-time setup imports your Days game; progress stays separate.", SS_LEFT, 32, 304, 576, 48, 0);
-        app->campaign = make(L"BUTTON", L"Play 358/2 Days Campaign", BS_DEFPUSHBUTTON | WS_TABSTOP, 32, 370, 280, 52, 10);
-        app->practice = make(L"BUTTON", L"358/2 Days Combat Practice", BS_PUSHBUTTON | WS_TABSTOP, 328, 370, 280, 52, 11);
-        app->status = make(L"STATIC", L"", SS_LEFT, 32, 438, 576, 52, 0);
-        app->progress = make(PROGRESS_CLASSW, L"", PBS_MARQUEE, 32, 494, 576, 5, 0);
-        app->browse = make(L"BUTTON", L"Choose Days game...", BS_PUSHBUTTON | WS_TABSTOP, 32, 516, 180, 30, 12);
-        const auto version_label = L"Pragmicat Mix " + wide(PRAGMICAT_VERSION_STRING) + L" · Yokimitsuro port 0.1.5";
-        make(L"STATIC", version_label.c_str(), SS_RIGHT, 246, 523, 362, 24, 0);
-        app->start(false, true); return 0;
+        SetWindowPos(window,nullptr,fitted.left,fitted.top,fitted.right-fitted.left,
+            fitted.bottom-fitted.top,SWP_NOZORDER|SWP_NOACTIVATE);
+        app->layout(); return 0;
+    }
+    case WM_GETMINMAXINFO: {
+        MONITORINFO monitor{sizeof(monitor)};
+        if(GetMonitorInfoW(MonitorFromWindow(window,MONITOR_DEFAULTTONEAREST),&monitor)) {
+            const unsigned dpi=GetDpiForWindow(window); RECT chrome{};
+            AdjustWindowRectExForDpi(&chrome,static_cast<DWORD>(GetWindowLongPtrW(window,GWL_STYLE)),FALSE,0,dpi);
+            const int chrome_width=chrome.right-chrome.left,chrome_height=chrome.bottom-chrome.top;
+            const auto size=ui::fit_client(monitor.rcWork.right-monitor.rcWork.left,
+                monitor.rcWork.bottom-monitor.rcWork.top,dpi,chrome_width,chrome_height,true);
+            auto* bounds=reinterpret_cast<MINMAXINFO*>(lparam);
+            bounds->ptMinTrackSize={size.width+chrome_width,size.height+chrome_height};
+        }
+        return 0;
+    }
+    case DM_GETDEFID: return MAKELRESULT(app->default_id,DC_HASDEFID);
+    case DM_SETDEFID: {
+        const int id=static_cast<int>(wparam);
+        if(id==10 || id==11 || id==12) {
+            SendMessageW(GetDlgItem(window,app->default_id),BM_SETSTYLE,BS_PUSHBUTTON,TRUE);
+            app->default_id=id;
+            SendMessageW(GetDlgItem(window,id),BM_SETSTYLE,BS_DEFPUSHBUTTON,TRUE);
+        }
+        return TRUE;
     }
     case WM_COMMAND:
         if (HIWORD(wparam) == BN_CLICKED) {
-            if (LOWORD(wparam) == 10) app->start(false); else if (LOWORD(wparam) == 11) app->start(true);
-            else if (LOWORD(wparam) == 12) try { app->choose_game(); } catch (const std::exception& error) { MessageBoxW(window, wide(error.what()).c_str(), title, MB_OK | MB_ICONERROR); }
+            const int command=ui::resolve_command(LOWORD(wparam),app->default_id,app->busy);
+            if (command==IDCANCEL) { SendMessageW(window,WM_CLOSE,0,0); return 0; }
+            if (command == 10) app->start(false); else if (command == 11) app->start(true);
+            else if (command == 12) try { app->choose_game(); } catch (const std::exception& error) { MessageBoxW(window, wide(error.what()).c_str(), title, MB_OK | MB_ICONERROR); }
         }
         return 0;
     case progress_message: { std::unique_ptr<std::wstring> text(reinterpret_cast<std::wstring*>(lparam)); SetWindowTextW(app->status, text->c_str()); return 0; }
@@ -186,9 +278,15 @@ int run_gui(Options options) {
     window_class.hIcon = LoadIconW(window_class.hInstance, MAKEINTRESOURCEW(101)); window_class.hIconSm = window_class.hIcon;
     window_class.hCursor = LoadCursorW(nullptr, IDC_ARROW); window_class.hbrBackground = app.background; window_class.lpszClassName = L"KingdomHearts358Days.PragmicatMix.Launcher";
     if (!RegisterClassExW(&window_class) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) fail(L"Could not open the launcher.");
-    const UINT dpi = GetDpiForSystem(); RECT area{0, 0, MulDiv(640, static_cast<int>(dpi), 96), MulDiv(568, static_cast<int>(dpi), 96)};
-    constexpr DWORD style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX;
-    AdjustWindowRectExForDpi(&area, style, FALSE, 0, dpi);
+    const UINT dpi=GetDpiForSystem();
+    constexpr DWORD style=WS_OVERLAPPEDWINDOW;
+    RECT chrome{}; AdjustWindowRectExForDpi(&chrome,style,FALSE,0,dpi);
+    MONITORINFO monitor{sizeof(monitor)};
+    if(!GetMonitorInfoW(MonitorFromPoint(POINT{0,0},MONITOR_DEFAULTTOPRIMARY),&monitor))
+        monitor.rcWork={0,0,GetSystemMetrics(SM_CXSCREEN),GetSystemMetrics(SM_CYSCREEN)};
+    const auto size=ui::fit_client(monitor.rcWork.right-monitor.rcWork.left,
+        monitor.rcWork.bottom-monitor.rcWork.top,dpi,chrome.right-chrome.left,chrome.bottom-chrome.top);
+    RECT area{0,0,size.width,size.height}; AdjustWindowRectExForDpi(&area,style,FALSE,0,dpi);
     const HWND window = CreateWindowExW(0, window_class.lpszClassName, title, style, CW_USEDEFAULT, CW_USEDEFAULT, area.right - area.left, area.bottom - area.top, nullptr, nullptr, window_class.hInstance, &app);
     if (!window) fail(L"Could not open the launcher window.");
     ShowWindow(window, SW_SHOW); UpdateWindow(window); MSG message{};

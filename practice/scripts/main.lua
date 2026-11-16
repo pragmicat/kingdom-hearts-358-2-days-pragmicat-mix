@@ -7,6 +7,14 @@ local GROUPS = {
   { { 41, 0, -4, 1.5 } },
   { { 4, 0, -3, 8 } },
 }
+local GROUP_NAMES = { "Ground encounter", "Aerial encounter", "Armored target", "Single ground target" }
+local CONTROL_PAGES = {
+  "1/4 ATTACKS: Attack=Light. X+direction=Technique; directions follow your target.",
+  "2/4 FINISHERS: Hold Light, press Technique: Toward=Rush; Away=Burst; neutral/side=Flurry.",
+  "3/4 AIR: Ground Away+X: launch, Jump as enemy rises. Air hit+Jump near airborne foe: Enemy Step.",
+  "4/4 TOOLS: Defense=dodge/guard. Select=ready Drive/return. Magic=normal spells; Cure not refilled.",
+}
+local control_page = 1
 local run, reset_requested
 
 local function actor_kind()
@@ -50,15 +58,23 @@ local function arm()
 end
 
 local mode = mod.option{
-  key = "targets", kind = "choice", label = "Practice targets", default = 1,
+  key = "targets", kind = "choice", label = "Target preset", default = 1,
   values = { "Mixed encounters", "Single ground target", "Aerial targets", "Armored target" },
-  description = "Mixed encounters cycle through ground, aerial and armored enemies.",
+  description = "Mixed cycles ground, aerial and armored encounters. Changing the preset restarts this encounter.",
   on_change = function() reset_requested = true end,
 }
 mod.option{
   key = "restart", kind = "button", label = "Restart encounter",
-  description = "Restore health, return to the start and replace the current practice enemies.",
+  description = "Restore health and starting position, then replace the targets. Keep the selected preset.",
   on_change = function() reset_requested = true end,
+}
+mod.option{
+  key = "controls", kind = "button", label = "Combat controls",
+  description = "Attack=Light; X=Technique; hold Attack then X=finisher; Jump=air moves; Defense=dodge/guard; Select=Drive. Use your game mapping. Press again for the next help page.",
+  on_change = function()
+    mod.notice(CONTROL_PAGES[control_page])
+    control_page = control_page % #CONTROL_PAGES + 1
+  end,
 }
 
 local function group_index()
@@ -67,6 +83,30 @@ local function group_index()
   if mode.value == 4 then return 3 end
   return run.cycle
 end
+
+mod.option{
+  key = "status", kind = "button", label = "Encounter status",
+  description = "Show the current encounter, remaining targets or reset progress without interrupting practice.",
+  on_change = function()
+    if not belongs_here() then
+      mod.notice("Combat Practice is inactive. Open Combat Practice from the launcher.")
+    elseif run == nil or actor_kind() == nil or not memory.loaded(2) or not memory.loaded(107) then
+      mod.notice("Combat Practice is preparing. Wait for Roxas and the arena to load.")
+    elseif reset_requested then
+      mod.notice("Encounter reset queued. Practice will restart when play resumes.")
+    elseif run.phase == "fighting" then
+      mod.notice(GROUP_NAMES[group_index()] .. ". Targets remaining: " .. #enemies.list() .. ".")
+    elseif run.phase == "failed" then
+      mod.notice("Practice needs a retry. Choose Restart encounter to try again.")
+    elseif run.phase == "clearing" then
+      mod.notice("Resetting practice. Waiting for the current targets to clear before replacing them.")
+    elseif run.phase == "reset" then
+      mod.notice("Resetting practice. Restoring health and starting position before the next encounter.")
+    else
+      mod.notice("Next: " .. GROUP_NAMES[group_index()] .. ". Waiting for the arena to be ready.")
+    end
+  end,
+}
 
 local function heal()
   local maximum = player.max_hp
@@ -90,6 +130,7 @@ local function clear_encounter()
 end
 
 local function reset_encounter()
+  run.recovering = run.recovering or run.phase == "failed"
   run.phase, run.ticks, run.failures = "clearing", 0, 0
   reset_requested = false
   heal()
@@ -151,6 +192,10 @@ mod.on("frame", function(e)
   if #enemies.list() ~= 0 or not heal() then return end
   if spawn() then
     run.phase, run.failures = "fighting", 0
+    if run.recovering then
+      mod.notice("Practice recovered. " .. GROUP_NAMES[group_index()] .. " ready.")
+      run.recovering = false
+    end
   else
     run.failures, run.ticks = run.failures + 1, 30
     if run.failures >= 20 then

@@ -105,7 +105,7 @@ def run_portable(names):
 
 def main():
     ap = argparse.ArgumentParser()
-    names = ['flow','limit','motion','rules','drive','animation','hud','practice','weapon_animation']
+    names = ['flow','limit','motion','rules','drive','animation','hud','practice','weapon_animation','launcher_layout']
     ap.add_argument('--only', choices=names+['all'],default='all')
     ap.add_argument('--rebuild', action='store_true', help='Recompile selected test executables even when unchanged')
     args = ap.parse_args()

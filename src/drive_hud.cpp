@@ -46,25 +46,23 @@ Model make_model(const rxdrive::View& view, bool visible) noexcept {
 Layout make_layout(int width, int height, unsigned dpi) noexcept {
     Layout out;
     if (width < 280 || height < 180 || width > 32768 || height > 32768) return out;
-    const float pixel_scale = static_cast<float>(std::clamp(dpi, 72u, 384u)) / 96.0F;
-    const float fit = std::min({pixel_scale, static_cast<float>(width) / 720.0F,
+    const float dpi_scale = static_cast<float>(std::clamp(dpi, 72u, 384u)) / 96.0F;
+    const float fit = std::min({dpi_scale, static_cast<float>(width) / 720.0F,
                                static_cast<float>(height) / 360.0F});
-    const float scale = std::max(0.65F, fit);
-    const auto px = [scale](float value) { return std::max(1, static_cast<int>(std::lround(value * scale))); };
-    const int margin = px(22), panel_width = std::min(px(224), width - margin * 2);
-    const int panel_height = px(58);
+    // One logical pixel always occupies a whole number of display pixels.
+    // At small windows the same 5x7 letters remain legible instead of blurring.
+    const int unit = std::clamp(static_cast<int>(std::lround(2.0F * fit)), 1, 8);
+    const int margin = 11 * unit, panel_width = 106 * unit, panel_height = 23 * unit;
     // Reserve the native bottom-right HP area rather than covering/replacing it.
-    const int bottom_reserve = std::max(px(88), static_cast<int>(height * 0.14F));
+    const int bottom_reserve = std::max({50, 44 * unit, static_cast<int>(height * 0.14F)});
     out.panel = {width - margin - panel_width, std::max(margin, height - bottom_reserve - panel_height),
                  panel_width, panel_height};
-    const int inset = px(14), top = px(8), text_height = px(20);
-    out.label = {inset, top, px(70), text_height};
-    out.status = {px(84), top, panel_width - px(84) - inset, text_height};
-    out.track = {inset, px(35), panel_width - inset * 2, px(7)};
-    out.font_px = px(12);
+    out.label = {8 * unit, 4 * unit, 31 * unit, 8 * unit};
+    out.status = {44 * unit, 4 * unit, 54 * unit, 8 * unit};
+    out.track = {8 * unit, 14 * unit, 90 * unit, 5 * unit};
+    out.font_px = 7 * unit;
     out.valid = out.panel.x >= 0 && out.panel.y >= 0 &&
-        out.panel.x + panel_width <= width && out.panel.y + panel_height <= height &&
-        out.track.width > 0 && out.status.width > 0;
+        out.panel.x + panel_width <= width && out.panel.y + panel_height <= height;
     return out;
 }
 bool should_show(const Model& model, bool enabled, bool visible, bool minimized, bool focused, bool fresh) noexcept {
@@ -72,32 +70,102 @@ bool should_show(const Model& model, bool enabled, bool visible, bool minimized,
 }
 namespace {
 struct Color { unsigned r, g, b, a; };
-void over(std::uint32_t& pixel, Color color, float coverage) {
-    const unsigned a = static_cast<unsigned>(std::clamp(std::lround(color.a * coverage), 0l, 255l));
-    const unsigned inverse = 255 - a;
-    const auto channel = [a, inverse](unsigned source, unsigned dest) {
-        return (source * a + dest * inverse + 127) / 255;
+void over(std::uint32_t& pixel, Color color) {
+    const unsigned inverse = 255 - color.a;
+    const auto channel = [color, inverse](unsigned source, unsigned dest) {
+        return (source * color.a + dest * inverse + 127) / 255;
     };
     const unsigned r = channel(color.r, (pixel >> 16) & 255u);
     const unsigned g = channel(color.g, (pixel >> 8) & 255u);
     const unsigned b = channel(color.b, pixel & 255u);
-    const unsigned alpha = a + (((pixel >> 24) * inverse + 127) / 255);
+    const unsigned alpha = color.a + (((pixel >> 24) * inverse + 127) / 255);
     pixel = (alpha << 24) | (r << 16) | (g << 8) | b;
 }
-void round_rect(Image& image, Rect box, float radius, Color color) {
-    if (box.width <= 0 || box.height <= 0) return;
-    radius = std::clamp(radius, 0.0F, std::min(box.width, box.height) * 0.5F);
-    const float half_x = box.width * 0.5F, half_y = box.height * 0.5F;
-    for (int y = std::max(0, box.y - 1); y < std::min(image.height, box.y + box.height + 1); ++y)
-        for (int x = std::max(0, box.x - 1); x < std::min(image.width, box.x + box.width + 1); ++x) {
-            const float qx = std::abs(x + 0.5F - box.x - half_x) - half_x + radius;
-            const float qy = std::abs(y + 0.5F - box.y - half_y) - half_y + radius;
-            const float distance = std::sqrt(std::max(qx, 0.0F) * std::max(qx, 0.0F) +
-                                             std::max(qy, 0.0F) * std::max(qy, 0.0F)) +
-                                   std::min(std::max(qx, qy), 0.0F) - radius;
-            over(image.pixels[static_cast<std::size_t>(y) * image.width + x], color,
-                 std::clamp(0.5F - distance, 0.0F, 1.0F));
+void rectangle(Image& image, Rect box, Color color) {
+    const int right = std::min(image.width, box.x + std::max(0, box.width));
+    const int bottom = std::min(image.height, box.y + std::max(0, box.height));
+    for (int y = std::max(0, box.y); y < bottom; ++y)
+        for (int x = std::max(0, box.x); x < right; ++x)
+            over(image.pixels[static_cast<std::size_t>(y) * image.width + x], color);
+}
+void plate(Image& image, Rect box, int cut, Color color) {
+    // Hard stepped bevels retain their silhouette at the game's pixel scale.
+    for (int row = 0; row < box.height; ++row) {
+        const int inset = std::max({0, cut - row, cut - (box.height - row - 1)});
+        rectangle(image, {box.x + inset, box.y + row, box.width - 2 * inset, 1}, color);
+    }
+}
+// Original 5x7 glyphs authored for this HUD. No external font or game asset is
+// loaded. The same raster reaches Windows and headless previews byte-for-byte.
+std::array<unsigned char, 7> glyph(char c) {
+    if (c >= 'a' && c <= 'z') c = static_cast<char>(c - 'a' + 'A');
+    switch (c) {
+    case 'A': return {14,17,17,31,17,17,17};
+    case 'B': return {30,17,17,30,17,17,30};
+    case 'C': return {15,16,16,16,16,16,15};
+    case 'D': return {30,17,17,17,17,17,30};
+    case 'E': return {31,16,16,30,16,16,31};
+    case 'F': return {31,16,16,30,16,16,16};
+    case 'G': return {15,16,16,23,17,17,15};
+    case 'H': return {17,17,17,31,17,17,17};
+    case 'I': return {31,4,4,4,4,4,31};
+    case 'J': return {7,2,2,2,18,18,12};
+    case 'K': return {17,18,20,24,20,18,17};
+    case 'L': return {16,16,16,16,16,16,31};
+    case 'M': return {17,27,21,21,17,17,17};
+    case 'N': return {17,25,25,21,19,19,17};
+    case 'O': return {14,17,17,17,17,17,14};
+    case 'P': return {30,17,17,30,16,16,16};
+    case 'Q': return {14,17,17,17,21,18,13};
+    case 'R': return {30,17,17,30,20,18,17};
+    case 'S': return {15,16,16,14,1,1,30};
+    case 'T': return {31,4,4,4,4,4,4};
+    case 'U': return {17,17,17,17,17,17,14};
+    case 'V': return {17,17,17,17,17,10,4};
+    case 'W': return {17,17,17,21,21,27,17};
+    case 'X': return {17,17,10,4,10,17,17};
+    case 'Y': return {17,17,10,4,4,4,4};
+    case 'Z': return {31,1,2,4,8,16,31};
+    case '0': return {14,17,19,21,25,17,14};
+    case '1': return {4,12,4,4,4,4,14};
+    case '2': return {14,17,1,2,4,8,31};
+    case '3': return {30,1,1,14,1,1,30};
+    case '4': return {2,6,10,18,31,2,2};
+    case '5': return {31,16,16,30,1,1,30};
+    case '6': return {14,16,16,30,17,17,14};
+    case '7': return {31,1,2,4,8,8,8};
+    case '8': return {14,17,17,14,17,17,14};
+    case '9': return {14,17,17,15,1,1,14};
+    case '%': return {25,25,2,4,8,19,19};
+    case '-': return {0,0,0,31,0,0,0};
+    case '.': return {0,0,0,0,0,12,12};
+    case ' ': return {};
+    default: return {14,17,1,2,4,0,4};
+    }
+}
+bool text(Image& image, Rect box, int font_px, const char* value, bool right, Color color) {
+    if (!value || !*value) return true;
+    std::size_t length = 0;
+    while (length < 24 && value[length]) ++length;
+    if (length == 24 || box.width < 1 || box.height < 8) return false;
+    const int units = static_cast<int>(length) * 6 - 1;
+    const int unit = std::min({font_px / 7, box.height / 8, box.width / (units + 1)});
+    if (unit < 1) return false;
+    const int origin_x = right ? box.x + box.width - (units + 1) * unit : box.x;
+    const int origin_y = box.y + (box.height - 8 * unit) / 2;
+    // Shadow is drawn first, then opaque foreground so neighboring glyphs do
+    // not dim one another. Neither layer needs GDI or antialiasing coverage.
+    for (int pass = 0; pass < 2; ++pass)
+        for (std::size_t n = 0; n < length; ++n) {
+            const auto rows = glyph(value[n]);
+            const int x = origin_x + static_cast<int>(n) * 6 * unit + (pass == 0 ? unit : 0);
+            const int y = origin_y + (pass == 0 ? unit : 0);
+            for (int row = 0; row < 7; ++row) for (int column = 0; column < 5; ++column)
+                if (rows[row] & (1u << (4 - column)))
+                    rectangle(image, {x + column * unit, y + row * unit, unit, unit},
+                              pass == 0 ? Color{0,3,8,255} : color);
         }
+    return true;
 }
 #ifdef _WIN32
 struct Surface {
@@ -128,66 +196,53 @@ struct Surface {
     }
     ~Surface() noexcept { reset(); }
 };
-bool text(Image& image, Rect box, int font_px, const char* value, bool right, Color color) {
-    if (!value || !*value) return true;
-    Surface mask;
-    if (!mask.create(image.width, image.height)) return false;
-    std::memset(mask.data, 0, image.pixels.size() * sizeof(std::uint32_t));
-    const HFONT font = CreateFontW(-font_px, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
-        DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY,
-        DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
-    if (!font) return false;
-    const HGDIOBJ previous = SelectObject(mask.dc, font);
-    if (!previous || previous == HGDI_ERROR) { DeleteObject(font); return false; }
-    SetBkMode(mask.dc, TRANSPARENT); SetTextColor(mask.dc, RGB(255, 255, 255));
-    std::array<wchar_t, 32> wide{};
-    for (std::size_t i = 0; value[i] && i + 1 < wide.size(); ++i) wide[i] = static_cast<unsigned char>(value[i]);
-    RECT bounds{box.x, box.y, box.x + box.width, box.y + box.height};
-    const bool drawn = DrawTextW(mask.dc, wide.data(), -1, &bounds,
-        DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX | (right ? DT_RIGHT : DT_LEFT)) != 0;
-    const bool flushed = GdiFlush() != 0; // synchronize GDI before reading DIB coverage
-    const auto* pixels = static_cast<const std::uint32_t*>(mask.data);
-    for (std::size_t i = 0; i < image.pixels.size(); ++i) {
-        const unsigned coverage = std::max({pixels[i] & 255u, (pixels[i] >> 8) & 255u, (pixels[i] >> 16) & 255u});
-        if (coverage) over(image.pixels[i], color, coverage / 255.0F);
-    }
-    SelectObject(mask.dc, previous); DeleteObject(font);
-    return drawn && flushed;
-}
 #endif
 }
 Image render(const Model& model, const Layout& layout) noexcept {
     try {
     Image image;
     if (!layout.valid || model.mode == Mode::Hidden || layout.panel.width <= 0 || layout.panel.height <= 0 ||
-        layout.panel.width > 2048 || layout.panel.height > 512) return image;
+        layout.panel.width > 2048 || layout.panel.height > 512 ||
+        layout.font_px < 7 || layout.font_px > 56 || layout.font_px % 7) return image;
+    const auto fits = [&](Rect box) {
+        return box.x >= 0 && box.y >= 0 && box.width > 0 && box.height > 0 &&
+            box.x <= layout.panel.width && box.y <= layout.panel.height &&
+            box.width <= layout.panel.width - box.x && box.height <= layout.panel.height - box.y;
+    };
+    if (!fits(layout.label) || !fits(layout.status) || !fits(layout.track)) return image;
     image.width = layout.panel.width; image.height = layout.panel.height;
     image.pixels.resize(static_cast<std::size_t>(image.width) * image.height);
-    const float scale = image.height / 58.0F;
-    const int edge = std::max(1, static_cast<int>(std::lround(2 * scale)));
-    const Rect card{edge, edge, image.width - edge * 2, image.height - edge * 2 - 1};
-    round_rect(image, {card.x + 1, card.y + 2, card.width, card.height}, 10 * scale, {0, 0, 0, 70});
-    round_rect(image, card, 10 * scale, {102, 136, 164, 110});
-    round_rect(image, {card.x + 1, card.y + 1, card.width - 2, card.height - 2}, 9 * scale, {7, 16, 27, 240});
-    Color accent = model.mode == Mode::Ready ? Color{255, 204, 99, 255} :
-                   model.mode == Mode::Active ? Color{91, 222, 255, 255} : Color{83, 177, 210, 245};
+    const int unit = std::max(1, layout.font_px / 7);
+    const Rect frame{unit, unit, image.width - 3 * unit, image.height - 3 * unit};
+    plate(image, {frame.x + unit, frame.y + unit, frame.width, frame.height}, 3 * unit, {0,3,8,180});
+    plate(image, frame, 3 * unit, {116,149,171,255});
+    plate(image, {frame.x + unit, frame.y + unit, frame.width - 2 * unit, frame.height - 2 * unit},
+          2 * unit, {8,19,31,245});
+    rectangle(image, {7 * unit, 2 * unit, image.width - 15 * unit, unit}, {175,201,214,255});
+    const bool low_time = model.mode == Mode::Active && model.seconds > 0 && model.seconds <= 3;
+    const Color accent = model.mode == Mode::Ready ? Color{255,205,83,255} :
+                         low_time ? Color{255,163,70,255} :
+                         model.mode == Mode::Active ? Color{85,165,255,255} : Color{65,210,238,255};
+    rectangle(image, {3 * unit, 7 * unit, 2 * unit, 8 * unit}, accent);
     const auto track = layout.track;
-    round_rect(image, track, track.height * 0.5F, {18, 35, 49, 255});
+    rectangle(image, {track.x - unit, track.y - unit, track.width + 2 * unit, track.height + 2 * unit}, {68,98,121,255});
+    rectangle(image, track, {3,10,18,255});
     const float fraction = std::isfinite(model.fraction) ? std::clamp(model.fraction, 0.0F, 1.0F) : 0.0F;
     const int filled = static_cast<int>(std::lround(track.width * fraction));
     if (filled > 0) {
-        const Rect fill{track.x, track.y, filled, track.height};
-        if (model.mode == Mode::Ready)
-            round_rect(image, {fill.x - 1, fill.y - 1, fill.width + 2, fill.height + 2}, static_cast<float>(track.height), {255, 190, 65, 58});
-        round_rect(image, fill, track.height * 0.5F, accent);
-        if (track.height >= 4)
-            round_rect(image, {fill.x + 2, fill.y + 1, std::max(0, fill.width - 4), 1}, 0, {255, 255, 255, 95});
+        rectangle(image, {track.x, track.y, filled, track.height}, accent);
+        rectangle(image, {track.x, track.y, filled, unit},
+                  model.mode == Mode::Ready ? Color{255,237,166,255} :
+                  low_time ? Color{255,215,151,255} : Color{160,232,255,255});
+        rectangle(image, {track.x, track.y + track.height - unit, filled, unit},
+                  {accent.r / 2, accent.g / 2, accent.b / 2,255});
     }
-#ifdef _WIN32
-    if (!text(image, layout.label, layout.font_px, "DRIVE", false, {194, 212, 226, 205}) ||
+    // Ten bounded cells make progress readable without adding another number.
+    for (int cell = 1; cell < 10; ++cell)
+        rectangle(image, {track.x + cell * track.width / 10 - unit, track.y, unit, track.height}, {8,19,31,255});
+    if (!text(image, layout.label, layout.font_px, "DRIVE", false, {226,240,246,255}) ||
         !text(image, layout.status, layout.font_px, model.status.data(), true,
-              model.mode == Mode::Ready ? accent : Color{218, 239, 249, 245})) return {};
-#endif
+              (model.mode == Mode::Ready || low_time) ? accent : Color{226,240,246,255})) return {};
     return image;
     } catch (...) {
         // This optional HUD must never abort native combat for an allocation or

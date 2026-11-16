@@ -106,11 +106,94 @@ void raster_has_premultiplied_alpha_and_distinct_actual_fill() {
     CHECK(rxhud::render({},layout).pixels.empty());
     auto invalid = layout; invalid.panel.width = 100000; CHECK(rxhud::render(rxhud::make_model(v,true),invalid).pixels.empty());
 }
+std::array<rxhud::Model,9> display_states() {
+    std::array<rxhud::Model,9> result{};
+    auto v=view();
+    for(unsigned index=0;index<result.size();++index) {
+        v.phase=index==4?rxdrive::Phase::ActivationQueued:index==7?rxdrive::Phase::RestorationQueued:
+                index>=5?rxdrive::Phase::Active:rxdrive::Phase::Normal;
+        v.charge=index==0?0u:index==1?360u:index==2?990u:1000u;
+        v.ready=index==3;v.remaining_ticks=index==6?120u:index==7?0u:421u;
+        v.duration_ticks=index==8?std::numeric_limits<unsigned>::max():900u;
+        if(index==8)v.remaining_ticks=v.duration_ticks;
+        result[index]=rxhud::make_model(v,true);
+    }
+    return result;
+}
+void portable_glyphs_are_visible_crisp_and_contained() {
+    constexpr std::uint32_t foreground=0xffe2f0f6u, shadow=0xff000308u;
+    for(int unit:{1,2,3,4,8})for(const char* word:{"DRIVE","READY","QUEUED","ENDING","100%","71582789s"}) {
+        rxhud::Image image;image.width=64*unit;image.height=14*unit;
+        image.pixels.resize(static_cast<std::size_t>(image.width)*image.height);
+        const rxhud::Rect box{4*unit,3*unit,54*unit,8*unit};
+        CHECK(rxhud::text(image,box,7*unit,word,true,{226,240,246,255}));
+        unsigned ink=0,shade=0;
+        for(int y=0;y<image.height;++y)for(int x=0;x<image.width;++x) {
+            const auto pixel=image.pixels[static_cast<std::size_t>(y)*image.width+x];
+            if(pixel)CHECK(x>=box.x&&x<box.x+box.width&&y>=box.y&&y<box.y+box.height);
+            CHECK(pixel==0||pixel==foreground||pixel==shadow);
+            ink+=pixel==foreground;shade+=pixel==shadow;
+            // Every logical pixel remains a solid square, without interpolation.
+            CHECK(pixel==image.pixels[static_cast<std::size_t>(y/unit*unit)*image.width+x/unit*unit]);
+        }
+        CHECK(ink>=40u*unit*unit&&shade>=10u*unit*unit);
+    }
+    const auto layout=rxhud::make_layout(1280,720);
+    const auto image=rxhud::render(display_states()[0],layout);
+    const int unit=layout.font_px/7;
+    const auto at=[&](int x,int y){return image.pixels[static_cast<std::size_t>(layout.label.y+y*unit)*image.width+layout.label.x+x*unit];};
+    // The first D has a four-pixel top, hollow body and its right stem below it.
+    CHECK(at(0,0)==foreground&&at(3,0)==foreground&&at(4,0)!=foreground);
+    CHECK(at(0,1)==foreground&&at(1,1)!=foreground&&at(4,1)==foreground);
+    CHECK(layout.panel.width*layout.panel.height<224*58); // more room for battle visibility
+}
+void every_state_fits_minimum_windows_dpi_and_long_timers() {
+    const auto states=display_states();
+    for(const auto& size:{std::pair{280,180},{320,240},{640,480},{720,360},{1280,720},{1920,1080},{3840,2160},{900,1600}})
+    for(unsigned dpi:{72u,96u,144u,192u,384u,std::numeric_limits<unsigned>::max()}) {
+        const auto layout=rxhud::make_layout(size.first,size.second,dpi);CHECK(layout.valid);
+        for(const auto& state:states) {
+            const auto image=rxhud::render(state,layout);CHECK(!image.pixels.empty());
+            unsigned label_ink=0,status_ink=0;
+            const auto white=0xffe2f0f6u;
+            const auto status_color=state.mode==rxhud::Mode::Ready?0xffffcd53u:
+                state.seconds>0&&state.seconds<=3?0xffffa346u:white;
+            for(int y=layout.label.y;y<layout.label.y+layout.label.height;++y)
+                for(int x=layout.label.x;x<layout.label.x+layout.label.width;++x)
+                    label_ink+=image.pixels[static_cast<std::size_t>(y)*image.width+x]==white;
+            for(int y=layout.status.y;y<layout.status.y+layout.status.height;++y)
+                for(int x=layout.status.x;x<layout.status.x+layout.status.width;++x)
+                    status_ink+=image.pixels[static_cast<std::size_t>(y)*image.width+x]==status_color;
+            CHECK(label_ink>0&&status_ink>0);
+            for(auto pixel:image.pixels) {
+                const unsigned alpha=pixel>>24;
+                CHECK(alpha==0||alpha==180||alpha==255); // no antialiased edge coverage
+                CHECK(((pixel>>16)&255u)<=alpha&&((pixel>>8)&255u)<=alpha&&(pixel&255u)<=alpha);
+            }
+        }
+    }
+    auto layout=rxhud::make_layout(1280,720);auto model=states[0];model.status.fill('X');
+    CHECK(rxhud::render(model,layout).pixels.empty()); // bounded malformed status, no strlen overrun
+    layout.status.x=std::numeric_limits<int>::max();
+    CHECK(rxhud::render(states[0],layout).pixels.empty());
+}
+void low_time_uses_a_steady_warm_cue_without_changing_timer() {
+    auto v=view();v.phase=rxdrive::Phase::Active;v.duration_ticks=900;
+    const auto layout=rxhud::make_layout(1280,720);
+    const auto accent=[&](const rxhud::Image& image){return image.pixels[static_cast<std::size_t>(layout.track.y+2*(layout.font_px/7))*image.width+layout.track.x+3*(layout.font_px/7)];};
+    v.remaining_ticks=181;const auto before=rxhud::render(rxhud::make_model(v,true),layout);
+    CHECK((accent(before)&255u)>((accent(before)>>16)&255u));
+    v.remaining_ticks=180;const auto model=rxhud::make_model(v,true);CHECK(model.seconds==3);
+    const auto low=rxhud::render(model,layout);
+    CHECK(((accent(low)>>16)&255u)>(accent(low)&255u));
+    CHECK(low.pixels==rxhud::render(model,layout).pixels); // static cue, no flashing
+    CHECK(std::strcmp(model.status.data(),"3s")==0);
+}
 void repeated_offscreen_rendering_releases_gdi_resources() {
 #ifdef _WIN32
     auto v = view(); v.charge=1000;v.ready=true;
     const auto layout=rxhud::make_layout(1280,720,144);
-    CHECK(!rxhud::render(rxhud::make_model(v,true),layout).pixels.empty()); // warm up GDI/font caches
+    CHECK(!rxhud::render(rxhud::make_model(v,true),layout).pixels.empty()); // offscreen render must not create GDI font resources
     const DWORD before_gdi=GetGuiResources(GetCurrentProcess(),GR_GDIOBJECTS);
     const DWORD before_user=GetGuiResources(GetCurrentProcess(),GR_USEROBJECTS);
     for(unsigned i=0;i<50;++i) {
@@ -226,17 +309,19 @@ void game_identity_keeps_possibly_in_use_icons_valid_after_a_timeout() {
 }
 #endif
 void write_preview(const char* path) {
-    constexpr int width=340,height=455;
+    constexpr int width=340,height=540;
     std::vector<std::uint32_t> pixels(width*height,0xff142234u);
     auto v=view(); const auto layout=rxhud::make_layout(1280,720,96);
-    for (int row=0;row<5;++row) {
-        v.phase=row==2?rxdrive::Phase::Active:row==3?rxdrive::Phase::ActivationQueued:
-                row==4?rxdrive::Phase::RestorationQueued:rxdrive::Phase::Normal;
-        v.charge=row==0?360u:1000u;v.ready=row==1;v.remaining_ticks=421;
+    for (int row=0;row<8;++row) {
+        v.phase=row==4?rxdrive::Phase::ActivationQueued:row==7?rxdrive::Phase::RestorationQueued:
+                row>=5?rxdrive::Phase::Active:rxdrive::Phase::Normal;
+        v.charge=row==0?0u:row==1?360u:row==2?990u:1000u;v.ready=row==3;
+        v.remaining_ticks=row==6?120u:row==7?0u:421u;
         const auto image=rxhud::render(rxhud::make_model(v,true),layout);
+        CHECK(!image.pixels.empty());
         for(int y=0;y<image.height;++y)for(int x=0;x<image.width;++x) {
             const auto source=image.pixels[static_cast<std::size_t>(y)*image.width+x];
-            auto& dest=pixels[static_cast<std::size_t>(20+row*87+y)*width+58+x];
+            auto& dest=pixels[static_cast<std::size_t>(18+row*65+y)*width+(width-image.width)/2+x];
             const unsigned a=source>>24,inverse=255-a;
             const auto add=[&](unsigned shift) {return ((source>>shift)&255u)+((((dest>>shift)&255u)*inverse+127)/255);};
             dest=0xff000000u|(add(16)<<16)|(add(8)<<8)|add(0);
@@ -259,6 +344,9 @@ int main(int argc,char** argv) {
         {"unsigned resource/time ranges are bounded",test::input_ranges_are_clamped_without_overflow},
         {"client resize and DPI layout bounds",test::layouts_fit_resizes_and_dpi_without_covering_bottom_edge},
         {"premultiplied raster and real fraction fill",test::raster_has_premultiplied_alpha_and_distinct_actual_fill},
+        {"portable pixel glyphs are visible, crisp and contained",test::portable_glyphs_are_visible_crisp_and_contained},
+        {"all HUD states fit small windows, high DPI and long timers",test::every_state_fits_minimum_windows_dpi_and_long_timers},
+        {"last three seconds use a steady warm cue",test::low_time_uses_a_steady_warm_cue_without_changing_timer},
 #ifdef _WIN32
         {"offscreen GDI and USER resources are released",test::repeated_offscreen_rendering_releases_gdi_resources},
 #endif

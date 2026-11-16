@@ -27,7 +27,8 @@ Model make_model(const rxdrive::View&, bool visible) noexcept;
 Layout make_layout(int client_width, int client_height, unsigned dpi = 96) noexcept;
 bool should_show(const Model&, bool enabled, bool owner_visible,
                  bool owner_minimized, bool owner_foreground, bool fresh) noexcept;
-// Offscreen rasterization only: never creates or displays a window.
+// Portable pixel rasterization with original 5x7 glyphs and whole-pixel scaling.
+// No font/GDI dependency; offscreen rendering never creates or displays a window.
 Image render(const Model&, const Layout&) noexcept;
 
 // Starts a dedicated message-pumping UI thread. A HUD window is created lazily

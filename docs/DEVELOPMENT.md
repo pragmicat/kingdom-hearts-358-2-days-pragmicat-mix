@@ -56,6 +56,14 @@ behavioral regressions failed before their fixes. See
 
 ## Reproduce validation
 
+The visible UI pass now passes **170 C++ cases** (10 HUD, 3 launcher layout)
+and **21 practice Lua groups**. The HUD uses a compact angular pixel renderer,
+authored glyphs, segmented charge and a steady low-time cue. Practice has short
+on-demand controls and encounter status. The launcher reflows, fits its work
+area, handles per-monitor DPI and exposes scrollable/copyable status with
+explicit keyboard defaults. See [UI review and renderer preview](UI_REVIEW.md).
+Actual Windows launcher/overlay interaction and native gameplay remain unrun.
+
 Run from the repository root. Portable checks require Python and a C++20 compiler
 available as `c++` or selected through `CXX`:
 
