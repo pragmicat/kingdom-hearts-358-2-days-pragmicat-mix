@@ -15,6 +15,12 @@ unchanged from the visible UI pass; native gameplay remains unverified.
 
 ## Aim of each pass
 
+The signature-intent follow-up passes all **58 controller flow cases**. A fresh
+Technique press while holding Light still requests a signature, as does a
+deliberate simultaneous chord. Pressing Light while Technique remains held now
+continues normal ground/air pressure rather than accidentally requesting a
+signature. The regression failed before the change. Native feel remains unrun.
+
 Improve responsive, fluid combat with clear inputs, connected native animations,
 readable effects, and satisfying hit-confirmed movement. Preserve the distinct
 Light, directional Technique, chosen signature, pursuit, Enemy Step, magic, and

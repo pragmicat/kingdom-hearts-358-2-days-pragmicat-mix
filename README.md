@@ -22,7 +22,7 @@ First setup finds your existing Days PC port and prepared game data, or asks you
 | Dodge / guard | Normal defense button |
 | Activate / end Drive | Select / Back when charged |
 
-Directions are relative to the target. Signature directions select rush (toward), burst (away), or flurry (neutral/side). Rebind the underlying buttons in the game's Settings. Mod options control speed, buffering, Drive duration, and its display.
+Directions are relative to the target. Signature directions select rush (toward), burst (away), or flurry (neutral/side). A signature requires a fresh Technique press while Light is held; pressing Light while Technique remains held continues the normal chain. Rebind the underlying buttons in the game's Settings. Mod options control speed, buffering, Drive duration, and its display.
 
 Practice's Mods menu includes **Combat controls** and **Encounter status** for
 on-demand help. With the Mixed preset, **Encounter flow** can repeat the current

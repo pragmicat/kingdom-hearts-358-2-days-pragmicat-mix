@@ -500,6 +500,19 @@ void equipped_stats_survive_every_borrowed_bank() {
     }
     close();tear_original(original_table);
 }
+void light_after_held_technique_does_not_request_an_accidental_signature() {
+    for(int group:{0,1})for(int heading:{0,32768,-1}) {
+        reset();launch();build_player();CHECK(select_move(original_table,group,false));
+        const KhRef rr=active_record();put(rr,0x10,10*4096);put(rr,0x14,20*4096);
+        put(actor,0x7b0,10*4096);input_heading=heading;
+        pad_held=KH_BUTTON_X;pad_pressed=KH_BUTTON_A;
+        CHECK(step(actor)==0);CHECK(player.committed==static_cast<int>(rxroutes::Action::Light));
+        pad_pressed=0;next_a(original_table);
+        CHECK(player.active_move==(group?11:1060));
+        CHECK(player.pending_finisher==0&&!rxlimit::active(actor));
+        close();tear_original(original_table);
+    }
+}
 void light_pressure_has_no_automatic_fifth_hit_or_signature() {
     reset();launch();build_player();constexpr int expected[]={0,1060,5070,1};
     for(unsigned x=0;x<20;++x) {
@@ -1067,6 +1080,7 @@ int main() {
       {"default normal routes reach all sixteen stock attack clips",test::default_routes_cover_all_stock_attack_clips},
       {"stale SDK actor is refused and stop leaves retired actor memory alone",test::stale_sdk_actor_is_not_controlled_or_dereferenced_on_stop},
       {"target-relative directions and deliberately chosen signature chords",test::semantic_directions_and_signature_chords_are_stable},
+      {"Light after held Technique continues ground/air chains without accidental signatures",test::light_after_held_technique_does_not_request_an_accidental_signature},
       {"all borrowed moves retain equipped live weapon stats",test::equipped_stats_survive_every_borrowed_bank},
       {"Light pressure continues past five hits without forced signature",test::light_pressure_has_no_automatic_fifth_hit_or_signature},
       {"hit-confirm defense opens earlier than whiff recovery by authored role",test::confirmed_hit_cancels_earlier_than_a_whiff_and_respects_role_commitment},

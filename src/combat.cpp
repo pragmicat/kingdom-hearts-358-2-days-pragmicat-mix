@@ -574,7 +574,10 @@ void sample_input(KhRef actor) {
             }
         }
         const unsigned held = input->held();
-        const bool chord = (held & (KH_BUTTON_A | KH_BUTTON_X)) == (KH_BUTTON_A | KH_BUTTON_X);
+        // A finisher is a fresh Technique press while Light is held. Returning
+        // to Light with Technique still down must keep the normal attack chain.
+        const bool chord = (pressed & KH_BUTTON_X) != 0 &&
+            (held & (KH_BUTTON_A | KH_BUTTON_X)) == (KH_BUTTON_A | KH_BUTTON_X);
         player.queued = static_cast<int>(chord ? rxroutes::finisher(player.direction) :
             (pressed & KH_BUTTON_X) ? rxroutes::Action::Technique : rxroutes::Action::Light);
         player.queue_until = now + buffer_ticks;
