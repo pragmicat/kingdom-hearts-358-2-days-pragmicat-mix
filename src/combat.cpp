@@ -989,7 +989,10 @@ KhResult start(const KhHost* given) {
         drive_enabled = parameters->integer(host->plugin, "drive_enabled", 1) != 0;
         drive_meter = parameters->integer(host->plugin, "drive_meter", 1) != 0;
         const int hits = std::clamp(parameters->integer(host->plugin, "drive_charge_hits", 40), 10, 80);
-        drive_settings.charge_per_hit = static_cast<unsigned>(1000 / hits);
+        // Keep exact connection counts without truncating fractional charge.
+        // Forty connections retain the original 1000-capacity / 25-credit gauge.
+        drive_settings.capacity = static_cast<unsigned>(hits * 25);
+        drive_settings.charge_per_hit = 25;
         drive_settings.duration_ticks = static_cast<unsigned>(std::clamp(parameters->integer(host->plugin, "drive_seconds", 15), 8, 30) * 60);
         signature_damage_fx = static_cast<int>(std::clamp(parameters->number(host->plugin, "signature_damage", 1.0), .25, 1.0) * 4096);
     }

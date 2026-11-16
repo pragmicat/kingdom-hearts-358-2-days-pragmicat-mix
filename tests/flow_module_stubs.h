@@ -15,6 +15,7 @@ inline rxmotion::HitObserver primary_hit, secondary_hit;
 inline rxmotion::PacketPolicy packet_policy;
 inline void *primary_ctx, *secondary_ctx, *policy_ctx;
 inline rxdrive::View drive;
+inline rxdrive::Settings drive_config;
 inline rxdrive::Callbacks drive_callbacks;
 inline rxdrive::FrameContext drive_frame;
 inline rxrules::Snapshot rules;
@@ -38,6 +39,7 @@ inline void reset() {
     motion = {}; primary_hit = secondary_hit = nullptr; packet_policy = nullptr;
     primary_ctx = secondary_ctx = policy_ctx = nullptr;
     drive = {}; drive.available = true; drive_callbacks = {}; drive_frame = {};
+    drive_config = {};
     rules = {}; reaction = rxrules::Reaction::Native;
     motion_binds = motion_resets = motion_starts = motion_state_changes = 0;
     chase_requests = step_requests = motion_steps = serial = 0;
@@ -132,7 +134,8 @@ void reset(KhRef) { ++flow_stub::anim_resets; }
 void detach() {}
 }
 namespace rxdrive {
-bool init(const KhHost*, const KhEngine*, const KhActors*, const KhNet*, Callbacks callbacks, Settings) {
+bool init(const KhHost*, const KhEngine*, const KhActors*, const KhNet*, Callbacks callbacks, Settings settings) {
+    flow_stub::drive_config = settings;
     flow_stub::drive_callbacks = callbacks; return true;
 }
 void on_hit(KhRef, KhActor, unsigned, unsigned, void*) { ++flow_stub::drive_hits; }

@@ -6,6 +6,14 @@ Source version is **0.3.3**, targeting Yokimitsuro's native Days PC port **0.1.5
 This source review branch omits artwork. Windows packaging needs its original
 artwork assets integrated, followed by a fresh build and validation.
 
+The Drive-setting follow-up passes **66 controller cases**. Charge connections
+now matches every selectable count from 10 through 80 exactly: capacity scales
+with the chosen count instead of truncating 1000/count credit per connection.
+The default stays 1000 capacity, 25 credit and 40 connections; target dedupe and
+the two-target-per-attack limit are unchanged. The parameter-path regression
+failed before the fix and covers the full range plus clamped bounds. Native
+custom-setting behavior and gauge presentation still need gameplay validation.
+
 The charge-raster follow-up passes **11 HUD cases**. Pixel fill now reserves
 empty/full silhouettes for zero/full fractions: partial charge keeps an empty
 edge, while positive charge and the final active tick retain visible fill at

@@ -49,6 +49,9 @@ KhActors a{};
 KhInput i{};
 KhNet n{};
 KhEvents ev{};
+KhParameters parameters{};
+bool have_parameters;
+int configured_charge_hits;
 
 void* ptr(KhRef ref) {
     auto it=live.upper_bound(ref);
@@ -203,6 +206,10 @@ KhResult replace(const char* name,void* replacement,void** previous) {
     if(previous)*previous=it->second;it->second=replacement;return KH_OK;
 }
 KhSubscription subscribe(KhPlugin*,const char*,KhEventFunction,void*) {static unsigned count=1;return count++;}
+int32_t parameter_integer(KhPlugin*,const char* name,int32_t fallback) {
+    return std::strcmp(name,"drive_charge_hits")==0?configured_charge_hits:fallback;
+}
+double parameter_number(KhPlugin*,const char*,double fallback) {return fallback;}
 const void* find(KhPlugin*,const char* name,unsigned) {
     ++find_calls;if(missing==name)return nullptr;
     if(std::string(name)==KH_ENGINE)return &e;
@@ -210,6 +217,7 @@ const void* find(KhPlugin*,const char* name,unsigned) {
     if(std::string(name)==KH_INPUT)return &i;
     if(std::string(name)==KH_NET)return &n;
     if(std::string(name)==KH_EVENTS)return &ev;
+    if(std::string(name)==KH_PARAMETERS&&have_parameters)return &parameters;
     return nullptr;
 }
 void reset() {
@@ -220,6 +228,8 @@ void reset() {
     paused=false;menu_depth=0;building=false;stopping=false;buffer_ticks=12;speed_fx=5120;style=0;last_input_frame=~0u;
     repertoire_debug=false;defensive_cancels=true;move_fx=4710;turn_fx=5325;
     drive_enabled=drive_meter=true;signature_damage_fx=4096;drive_settings={1000,25,2,900};
+    have_parameters=false;configured_charge_hits=40;
+    parameters={sizeof(KhParameters),&parameter_integer,&parameter_number,nullptr};
     live.clear();allocation_heaps.clear();parts.clear();snapshots.clear();torn.clear();logs.clear();routines.clear();cursor=0x1000;
     loaded=true;blocked=room=seat=0;pad_frame=100;pad_pressed=pad_held=hidden=replace_calls=find_calls=speed_calls=0;
     sdk_live=true;
@@ -1155,6 +1165,19 @@ void practice_gauge_is_scoped_and_once_per_scene() {
     scene_event(&event,nullptr);frame_event(&event,nullptr);CHECK(flow_stub::practice_primes==2);
     close();tear_original(original_table);
 }
+void drive_charge_length_matches_each_selected_connection_count() {
+    for(int hits=9;hits<=81;++hits) {
+        reset();have_parameters=true;configured_charge_hits=hits;launch();
+        const auto settings=flow_stub::drive_config;
+        const unsigned expected=static_cast<unsigned>(std::clamp(hits,10,80));
+        CHECK(settings.charge_per_hit*(expected-1)<settings.capacity);
+        CHECK(settings.charge_per_hit*expected==settings.capacity);
+        CHECK(settings.capacity>=100&&settings.capacity<=10000);
+        CHECK(settings.max_targets_per_attack==2&&settings.duration_ticks==900);
+        if(expected==40)CHECK(settings.capacity==1000&&settings.charge_per_hit==25);
+        close();
+    }
+}
 void initial_signature_keeps_its_accepted_intent_until_the_native_window() {
     reset();launch();build_player();
     offer(rxroutes::Action::Flurry,rxroutes::Direction::Neutral);
@@ -1246,6 +1269,7 @@ int main() {
       {"queued form preserves melee while old spells finish, then exits safely",test::pending_form_keeps_melee_until_spells_finish_then_uses_a_real_exit},
       {"queued form uses the signature's authored exit",test::pending_form_can_leave_a_signature_at_its_authored_exit},
       {"practice primes Drive once per scene without changing campaign or paused input",test::practice_gauge_is_scoped_and_once_per_scene},
+      {"Drive charge setting matches every supported connection count",test::drive_charge_length_matches_each_selected_connection_count},
       {"initial signature chord stays committed until its authored native transition",test::initial_signature_keeps_its_accepted_intent_until_the_native_window}};
     unsigned failed=0;
     for(const auto& item:cases)try {std::cout<<"RUN "<<item.first<<std::endl;item.second();std::cout<<"PASS "<<item.first<<std::endl;}
