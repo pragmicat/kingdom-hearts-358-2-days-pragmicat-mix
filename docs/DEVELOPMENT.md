@@ -43,6 +43,17 @@ signature input lock. Rush, LightBurst and Flurry are covered through frame,
 sample, translate and step entry points; fresh visible defense remains allowed.
 Native gameplay and Windows validation remain outstanding.
 
+The broader experience pass now passes **164 C++ cases** (57 flow, 24 motion,
+7 HUD; other suites unchanged) and **18 practice Lua groups**. Defense retains
+newer follow-ups while retiring replaced inputs and old aerial requests. Native
+attacks retain hit credit across suspension without duplicate resource credit;
+interrupted/replaced attacks cannot receive stale callback credit. Practice
+resets recover from temporary/partial removal refusals and provide manual retry
+after persistent failure. Drive displays charge percentage, and the control
+guide separates grounded launcher/pursuit from airborne Enemy Step. New
+behavioral regressions failed before their fixes. See
+[the experience review](POLISH_REVIEW.md) for remaining measured polish work.
+
 ## Reproduce validation
 
 Run from the repository root. Portable checks require Python and a C++20 compiler

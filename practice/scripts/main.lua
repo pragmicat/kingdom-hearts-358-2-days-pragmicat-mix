@@ -73,11 +73,27 @@ local function heal()
   return maximum ~= nil and maximum > 0 and player.set_hp(maximum)
 end
 
+local function clear_encounter()
+  local targets = enemies.list()
+  if #targets > 0 then enemies.remove(targets) end
+  -- Native removal may be temporarily refused. Verify the live list before
+  -- recentering or spawning; a reset must never duplicate surviving targets.
+  if #enemies.list() == 0 then
+    run.phase, run.ticks, run.failures = "reset", 90, 0
+    return
+  end
+  run.failures, run.ticks = run.failures + 1, 30
+  if run.failures >= 20 then
+    run.phase = "failed"
+    mod.notice("Practice targets could not reset. Choose Restart encounter to try again.")
+  end
+end
+
 local function reset_encounter()
-  enemies.remove(enemies.list())
-  run.phase, run.ticks, run.failures = "reset", 90, 0
+  run.phase, run.ticks, run.failures = "clearing", 0, 0
   reset_requested = false
   heal()
+  clear_encounter()
 end
 
 local function spawn()
@@ -127,6 +143,7 @@ mod.on("frame", function(e)
   end
   if run.phase == "failed" then return end
   if run.ticks > 0 then run.ticks = run.ticks - 1; return end
+  if run.phase == "clearing" then clear_encounter(); return end
   if run.phase == "reset" then
     if not heal() or not player.set_position(HOME[1], HOME[2], HOME[3]) then return end
     run.phase = "waiting"
@@ -138,7 +155,7 @@ mod.on("frame", function(e)
     run.failures, run.ticks = run.failures + 1, 30
     if run.failures >= 20 then
       run.phase = "failed"
-      mod.notice("Practice targets could not load. Reopen Practice from the launcher.")
+      mod.notice("Practice targets could not load. Choose Restart encounter to try again.")
     end
   end
 end)

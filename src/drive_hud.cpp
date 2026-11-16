@@ -36,6 +36,10 @@ Model make_model(const rxdrive::View& view, bool visible) noexcept {
             result.mode = Mode::Ready;
             std::memcpy(result.status.data(), "QUEUED", 7);
         } else if (result.mode == Mode::Ready) std::memcpy(result.status.data(), "READY", 6);
+        else {
+            const unsigned percent = static_cast<unsigned>(static_cast<std::uint64_t>(charge) * 100 / view.capacity);
+            std::snprintf(result.status.data(), result.status.size(), "%u%%", percent);
+        }
     }
     return result;
 }

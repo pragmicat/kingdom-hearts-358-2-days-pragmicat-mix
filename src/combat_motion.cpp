@@ -78,6 +78,13 @@ void stop_chase() {
     request_until = 0;
     request_target = 0;
 }
+void clear_hit_confirmation() {
+    state.target = 0;
+    state.hit_frame = 0;
+    state.damage = 0;
+    state.confirmed_hit = state.blocked = state.answered = state.launcher_confirmed = false;
+    stop_chase();
+}
 void track_landing() {
     if (!state.actor || !bytes(state.actor)) return;
     const bool ground = (get<unsigned>(state.actor, 0x24) & 4u) != 0;
@@ -121,17 +128,24 @@ int apply_hit(KhRef enemy, KhRef source, KhRef packet) {
     // All normal Roxas repertoire records use mode0 sweeps. A previous spell
     // can share the same player source/seat while a new melee action whiffs;
     // source identity alone must not confirm that new action or grant a toss.
-    const bool owned = valid(state.actor) && state.attack_serial && packet && bytes(packet) &&
-        scoped_attacker == state.actor && scoped_target == enemy;
+    const KhRef attacker = state.actor;
+    const KhActor attacker_handle = player_handle;
+    const unsigned attack_serial = state.attack_serial;
+    const bool owned = valid(attacker) && attack_serial && packet && bytes(packet) &&
+        scoped_attacker == attacker && scoped_target == enemy;
     const KhActor target = owned ? actors->of(enemy) : 0;
     const bool enemy_kind = target && actors->kind(target) == KH_ACTOR_ENEMY;
     int before = 0, maximum = 0;
     float at[3]{};
     const bool measured = enemy_kind && actors->hp(target, &before, &maximum) == KH_OK &&
                           actors->position(target, at) == KH_OK && finite(at);
-    if (measured && packet_policy) packet_policy(state.actor, enemy, packet, packet_policy_user);
+    if (measured && packet_policy) packet_policy(attacker, enemy, packet, packet_policy_user);
     const int result = original_hit(enemy, source, packet);
-    if (!measured || !valid(state.actor)) return result;
+    // Policy and native hit callbacks may interrupt the action, start another
+    // attack or retire/rebind the actor. The outgoing hit must not credit that
+    // replacement action, even when its raw actor address is unchanged.
+    if (!measured || state.actor != attacker || player_handle != attacker_handle ||
+        state.attack_serial != attack_serial || !valid(attacker)) return result;
     const auto outcome = get<std::uint16_t>(packet, 0x24);
     // Packet result bit0 is an enemy answer/counter; bit1 is a native guard.
     // An accepted return can still be either, or the artificial 200-flag whiff.
@@ -293,6 +307,18 @@ void state_changed(KhRef actor, int native_state) {
         // airborne attacks and state2 transitions never replenish Enemy Step.
         stepped_targets = {}; stepped_count = 0;
     }
+    // Match the controller's audited forced-action rule. A suspended attack may
+    // resume, but damage/forced states must not attribute later contacts to it.
+    // Ordinary melee entry14/15 and state22 retain their existing identity.
+    if (actor == state.actor && native_state >= 13 && native_state <= 31 &&
+        native_state != 14 && native_state != 15 && native_state != 22) {
+        clear_hit_confirmation();
+        state.attack_serial = 0;
+        state.attack_id = -1;
+        state.group = 0;
+        state.launcher = false;
+        notified = {}; notified_count = 0;
+    }
     if (actor == state.actor && native_state != 1 && native_state != 2) stop_chase();
 }
 bool request_chase(KhRef actor) {
@@ -377,14 +403,11 @@ Snapshot snapshot() {
     if (state.actor && !live(state.actor)) { reset(); return state; }
     track_landing();
     if (state.actor && (!permitted || !permitted(state.actor))) {
-        // Pauses, menus and cinematics suspend input without retiring Roxas or
-        // starting a new airborne route. Drop old hit/chase intent, preserving
-        // the spent targets and cooldown until a real landing or actor change.
-        const KhRef actor = state.actor;
-        state = Snapshot{};
-        state.actor = actor;
-        notified = {}; notified_count = 0;
-        stop_chase();
+        // Suspension drops stale movement/hit intent, not the native attack
+        // still running after resume. Preserve its identity and per-target
+        // observer ledger so new contacts confirm without duplicate credit.
+        // Spent Enemy Step targets still last until landing or actor retirement.
+        clear_hit_confirmation();
         return state;
     }
     refresh_launch();

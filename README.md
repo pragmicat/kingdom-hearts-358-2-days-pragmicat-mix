@@ -17,11 +17,32 @@ First setup finds your existing Days PC port and prepared game data, or asks you
 | Light | Attack / bottom face button |
 | Technique | X / top face button, plus a direction |
 | Signature finisher | Hold Light and press Technique |
-| Launch / pursue / Enemy Step | Away + Technique, then Jump after a hit |
+| Launch and pursue | On the ground, Away + Technique; press Jump after the launcher connects and the enemy rises |
+| Enemy Step | In the air, press Jump after a melee hit on a nearby airborne enemy |
 | Dodge / guard | Normal defense button |
 | Activate / end Drive | Select / Back when charged |
 
 Directions are relative to the target. Signature directions select rush (toward), burst (away), or flurry (neutral/side). Rebind the underlying buttons in the game's Settings. Mod options control speed, buffering, Drive duration, and its display.
+
+Light continues your normal ground or air chain. Technique changes with direction:
+
+| Direction | Ground Technique | Air Technique |
+| --- | --- | --- |
+| Neutral | Wide sweep | Descending finisher |
+| Toward target | Advancing strike | Aerial carry |
+| Away from target | Launcher, then a carry if repeated | Descending finisher |
+| Left | Pressure strike | Descending finisher |
+| Right | Flurry finisher | Descending finisher |
+
+Jump and defense can be tapped slightly early and wait for an eligible exit;
+missed attacks retain their recovery. A clean hit opens earlier defensive exits.
+One dodge or guard can retain your combo route for a brief follow-up.
+
+Magic uses the game's normal spell selection. After the melee contacts finish,
+an eligible native spell request can flow out of the attack. Successful distinct
+melee actions gradually restore charges of equipped offensive spells; Cure is
+excluded. Drive shows charge as a percentage, then **READY** when available,
+**QUEUED** while waiting to transform, and time remaining once active.
 
 ### Build
 

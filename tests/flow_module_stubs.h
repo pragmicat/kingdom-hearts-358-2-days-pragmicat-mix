@@ -66,7 +66,12 @@ void attack_started(KhRef actor, int id, int group, bool launcher) {
     flow_stub::motion.group = group; flow_stub::motion.launcher = launcher;
     flow_stub::motion.attack_serial = ++flow_stub::serial;
 }
-void state_changed(KhRef, int state) { ++flow_stub::motion_state_changes; flow_stub::motion_last_state = state; }
+void state_changed(KhRef actor, int state) {
+    ++flow_stub::motion_state_changes; flow_stub::motion_last_state = state;
+    // Production retains pending motion only through ordinary jump/fall states.
+    if(actor==flow_stub::motion.actor&&state!=1&&state!=2)
+        flow_stub::motion.chase_queued=flow_stub::motion.enemy_step_queued=flow_stub::motion.chasing=false;
+}
 bool request_chase(KhRef) {
     ++flow_stub::chase_requests;
     if (!flow_stub::request_allowed || !flow_stub::motion.confirmed_hit) return false;

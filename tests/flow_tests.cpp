@@ -646,6 +646,104 @@ void signature_input_lock_keeps_its_deliberate_defense_request() {
     CHECK(player.defense_queued);CHECK(rxlimit::active(actor));
     close();tear_original(original_table);
 }
+void prepare_buffered_defense(bool signature) {
+    reset();launch();build_player();CHECK(select_move(original_table,0,false));
+    put(actor,0x24,4u);put(actor,0x7b0,6*4096);
+    flow_stub::confirm(actor,player.active_move,pad_frame);
+    if(signature) CHECK(rxlimit::begin(actor,rxlimit::Finisher::Rush));
+}
+int consume_buffered_defense(bool signature) {
+    put(actor,0x7b0,7*4096);pad_pressed=pad_held=0;++pad_frame;
+    return signature?static_cast<int>(signature_exit(actor,rxlimit::Finisher::Rush,12*4096)):step(actor);
+}
+void defense_preserves_a_newer_attack_and_its_intended_target() {
+    for(bool signature:{false,true})for(bool guard:{false,true}) {
+        prepare_buffered_defense(signature);
+        if(guard) roll_permission=0;
+        pad_pressed=KH_BUTTON_Y;sample_input(actor);CHECK(player.defense_queued);
+        ++pad_frame;pad_pressed=KH_BUTTON_X;input_heading=32768;sample_input(actor);
+        CHECK(player.queued==2);player.queued_target.handle=9001;
+        CHECK(consume_buffered_defense(signature)!=0);CHECK(observed_state==(guard?11:8));
+        CHECK(!player.defense_queued&&player.queued==2&&player.queued_target.handle==9001);
+        CHECK(player.direction==rxroutes::Direction::Away&&player.resume_route);
+        const auto exits=state_calls;const auto attacks=flow_stub::motion_starts;
+        translate(actor);CHECK(state_calls==exits&&flow_stub::motion_starts==attacks);
+        walk(original_table,0,0);CHECK(player.active_move==13080&&player.queued==0);
+        CHECK(flow_stub::motion_starts==attacks+1);
+        close();tear_original(original_table);
+    }
+}
+void defense_retires_same_or_older_attack_and_jump_intentions() {
+    for(bool signature:{false,true})for(bool same_frame:{false,true})for(bool guard:{false,true}) {
+        prepare_buffered_defense(signature);
+        if(guard) roll_permission=0;
+        pad_pressed=KH_BUTTON_A|KH_BUTTON_B|(same_frame?KH_BUTTON_Y:0u);sample_input(actor);
+        if(!same_frame) {++pad_frame;pad_pressed=KH_BUTTON_Y;sample_input(actor);}
+        player.committed=2;player.committed_target.handle=9001;
+        CHECK(consume_buffered_defense(signature)!=0);
+        CHECK(!player.jump_queued&&!player.defense_queued&&!player.queued&&!player.committed);
+        CHECK(!player.queued_target.handle&&!player.committed_target.handle);
+        close();tear_original(original_table);
+    }
+}
+void defense_preserves_a_newer_jump_tap_without_repeating_defense() {
+    for(bool signature:{false,true})for(bool guard:{false,true}) {
+        prepare_buffered_defense(signature);
+        if(guard) roll_permission=0;
+        pad_pressed=KH_BUTTON_Y;sample_input(actor);
+        ++pad_frame;pad_pressed=KH_BUTTON_B;sample_input(actor);
+        const unsigned deadline=player.jump_until,intent=player.jump_intent;
+        CHECK(consume_buffered_defense(signature)!=0);
+        CHECK(player.jump_queued&&!player.defense_queued);
+        CHECK(player.jump_until==deadline&&player.jump_intent==intent);
+        const auto exits=state_calls;sample_input(actor);CHECK(state_calls==exits&&!player.defense_queued);
+        close();tear_original(original_table);
+    }
+}
+void unavailable_defense_keeps_buffered_followups() {
+    for(bool signature:{false,true}) {
+        prepare_buffered_defense(signature);roll_permission=guard_permission=0;
+        const auto before=state_calls;
+        pad_pressed=KH_BUTTON_Y|KH_BUTTON_A|KH_BUTTON_B;sample_input(actor);
+        put(actor,0x7b0,7*4096);pad_pressed=pad_held=0;++pad_frame;
+        // Inspect defense refusal before the ordinary Jump fallback gets its
+        // own chance to consume this independent input.
+        CHECK((signature?static_cast<int>(signature_exit(actor,rxlimit::Finisher::Rush,12*4096)):
+            post_contact_defense(actor,active_record()))==0);
+        CHECK(player.defense_queued&&player.jump_queued&&player.queued==1);
+        CHECK(state_calls==before);
+        close();tear_original(original_table);
+    }
+}
+void accepted_defense_retires_previously_accepted_motion() {
+    for(bool chase:{false,true})for(bool guard:{false,true}) {
+        prepare_buffered_defense(false);
+        if(guard) roll_permission=0;
+        flow_stub::motion.chase_queued=chase;flow_stub::motion.enemy_step_queued=!chase;
+        pad_pressed=KH_BUTTON_Y|KH_BUTTON_B;sample_input(actor);
+        CHECK(consume_buffered_defense(false)!=0);
+        CHECK(!flow_stub::motion.chase_queued&&!flow_stub::motion.enemy_step_queued);
+        CHECK(flow_stub::motion_last_state==(guard?11:8)&&!player.jump_queued);
+        const auto requests=flow_stub::chase_requests+flow_stub::step_requests;
+        const auto movement=flow_stub::motion_steps;
+        ++pad_frame;flow_stub::native_motion_return=0x0200abcd;CHECK(step(actor)==0);
+        CHECK(flow_stub::motion_steps==movement&&flow_stub::chase_requests+flow_stub::step_requests==requests);
+        close();tear_original(original_table);
+    }
+}
+void refused_native_defense_preserves_pending_inputs_and_motion() {
+    prepare_buffered_defense(false);
+    pad_pressed=KH_BUTTON_Y|KH_BUTTON_A|KH_BUTTON_B;sample_input(actor);
+    flow_stub::motion.chase_queued=true;
+    const auto previous=set_state;set_state=[](KhRef,int) {return 0;};
+    put(actor,0x7b0,7*4096);
+    const auto changes=flow_stub::motion_state_changes;
+    CHECK(post_contact_defense(actor,active_record())==0);set_state=previous;
+    CHECK(player.defense_queued&&player.jump_queued&&player.queued==1);
+    CHECK(flow_stub::motion.chase_queued&&flow_stub::motion_state_changes==changes);
+    CHECK(pair_calls==0&&node_clear_calls==0);
+    close();tear_original(original_table);
+}
 void suppressed_signature_discards_old_intentions() {
     for(auto kind : {rxlimit::Finisher::Rush,rxlimit::Finisher::LightBurst,rxlimit::Finisher::Flurry})
     for(int entry=0;entry<4;++entry) {
@@ -982,6 +1080,12 @@ int main() {
       {"hidden actor discards accepted and queued combat intentions",[]{test::forced_control_loss_discards_old_intentions(2);}},
       {"ordinary pause preserves accepted input while explicit menus cancel it",test::ordinary_pause_preserves_an_accepted_command_but_menu_open_cancels_it},
       {"native signature input lock still accepts deliberate defense",test::signature_input_lock_keeps_its_deliberate_defense_request},
+      {"defense preserves newer attack, target and route until one native followup",test::defense_preserves_a_newer_attack_and_its_intended_target},
+      {"defense retires same or older attacks and jumps",test::defense_retires_same_or_older_attack_and_jump_intentions},
+      {"defense preserves a newer Jump without repeating defense",test::defense_preserves_a_newer_jump_tap_without_repeating_defense},
+      {"unavailable defense retains its buffered followups",test::unavailable_defense_keeps_buffered_followups},
+      {"accepted defense retires previously accepted aerial motion",test::accepted_defense_retires_previously_accepted_motion},
+      {"refused native defense preserves pending inputs and motion",test::refused_native_defense_preserves_pending_inputs_and_motion},
       {"suppressed signatures discard old intentions at every input entry",test::suppressed_signature_discards_old_intentions},
       {"suppressed signatures refuse taps and accept fresh visible defense",test::suppressed_signature_refuses_taps_then_accepts_fresh_visible_input},
       {"frame-only Light tap reaches one native follow-up",[]{test::frame_only_attack_tap_reaches_the_next_native_window(KH_BUTTON_A);}},

@@ -23,7 +23,7 @@ local function boot()
     memory = {u8=read,u16=read,u32=read,s32=read,loaded=function(id) return c.loaded[id] ~= false end},
     mod = { on=function(name,f) handlers[name]=f end,
             option=function(o) o.value=o.default; c.options[o.key]=o; return o end,
-            notice=function() c.notices=c.notices+1 end },
+            notice=function(message) c.notices=c.notices+1; c.last_notice=message end },
     player = { max_hp=100, position=function() if c.actor then return 0,.049,0 end end,
       set_hp=function(hp) if c.no_gauge then return nil,'not now' end; c.hp=hp; c.heals=c.heals+1; return true end,
       set_position=function(x,y,z) assert(x==0 and y==.049 and z==0); c.recentred=true; return not c.no_place end,
@@ -128,5 +128,52 @@ test('scope change never removes actors belonging to another field or session',f
     assert(not c.holds and not c.held_defeat and #c.live==1 and c.live[1]==999 and #c.made==3)
   end
 end)
-print(('%d/15 practice Lua groups passed'):format(groups))
+test('reset retries transient removal before replacing any targets',function()
+  for _,partial in ipairs({false,true}) do
+    local c=boot(); c.step(60); local remove=c.env.enemies.remove; local attempts=0
+    c.env.enemies.remove=function(ids)
+      attempts=attempts+1
+      if attempts==1 then
+        if partial then remove({ids[1]}) end
+        return nil,'temporarily busy'
+      end
+      return remove(ids)
+    end
+    c.reset(); c.step(1)
+    assert(attempts==1 and #c.live==(partial and 2 or 3) and #c.made==3 and not c.recentred)
+    c.step(200)
+    assert(attempts==2 and #c.live==3 and #c.made==6 and c.live[1]>3)
+    assert(c.recentred and c.hp==100 and c.notices==0)
+  end
+end)
+test('persistent reset refusal stops once and manual retry can recover',function()
+  local c=boot(); c.step(60); local remove=c.env.enemies.remove; local attempts=0
+  c.env.enemies.remove=function() attempts=attempts+1; return nil,'temporarily busy' end
+  c.reset(); c.step(2000)
+  assert(attempts>1 and attempts<=20 and c.notices==1 and #c.made==3 and #c.live==3)
+  assert(c.last_notice:find('Restart encounter',1,true))
+  local stopped=attempts; c.step(2000); assert(attempts==stopped and c.notices==1)
+  c.env.enemies.remove=remove; c.reset(); c.step(200)
+  assert(#c.live==3 and #c.made==6 and c.recentred and c.notices==1)
+end)
+test('pending reset retries respect pause readiness and field ownership',function()
+  for _,gate in ipairs({'pause','actor','resources','position','scope'}) do
+    local c=boot(); c.step(60); local remove=c.env.enemies.remove; local attempts=0
+    local position=c.env.player.position
+    c.env.enemies.remove=function() attempts=attempts+1; return nil,'temporarily busy' end
+    c.reset(); c.step(1); assert(attempts==1)
+    if gate=='actor' then c.actor=false
+    elseif gate=='resources' then c.loaded[107]=false
+    elseif gate=='position' then c.env.player.position=function() return nil end
+    elseif gate=='scope' then c.env.mission.id=1 end
+    c.step(300,gate=='pause'); assert(attempts==1 and #c.made==3 and c.notices==0)
+    if gate=='scope' then
+      assert(not c.holds and not c.held_defeat and #c.live==3)
+    else
+      c.actor=true; c.loaded[107]=true; c.env.player.position=position; c.env.enemies.remove=remove
+      c.step(200); assert(#c.live==3 and #c.made==6 and c.recentred)
+    end
+  end
+end)
+print(('%d/%d practice Lua groups passed'):format(groups,groups))
 ''')

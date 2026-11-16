@@ -26,7 +26,7 @@ rxdrive::View view() { rxdrive::View v; v.available = true; return v; }
 void real_charge_ready_and_active_time() {
     auto v = view(); v.charge = 360;
     auto model = rxhud::make_model(v, true); CHECK(model.mode == rxhud::Mode::Charging);
-    CHECK(std::abs(model.fraction - 0.36F) < 0.0001F && model.status[0] == 0);
+    CHECK(std::abs(model.fraction - 0.36F) < 0.0001F && std::strcmp(model.status.data(), "36%") == 0);
     v.charge = v.capacity; v.ready = true; model = rxhud::make_model(v, true);
     CHECK(model.mode == rxhud::Mode::Ready && model.fraction == 1 && std::strcmp(model.status.data(), "READY") == 0);
     v.phase = rxdrive::Phase::ActivationQueued; model = rxhud::make_model(v, true);
@@ -51,6 +51,21 @@ void visibility_and_invalid_views_fail_closed() {
     CHECK(!rxhud::should_show(model, true, true, true, true, true));
     CHECK(!rxhud::should_show(model, true, true, false, false, true));
     CHECK(!rxhud::should_show(model, true, true, false, true, false));
+}
+void charging_readout_reports_actual_progress_without_rounding_to_ready() {
+    auto v = view();
+    for (const auto& sample : {std::pair{0u,"0%"}, {1u,"0%"}, {360u,"36%"}, {999u,"99%"}, {1000u,"100%"}}) {
+        v.charge = sample.first;
+        const auto model = rxhud::make_model(v,true);
+        CHECK(model.mode == rxhud::Mode::Charging);
+        CHECK(std::strcmp(model.status.data(),sample.second) == 0);
+    }
+    v.capacity = 3; v.charge = 2;
+    CHECK(std::strcmp(rxhud::make_model(v,true).status.data(),"66%") == 0);
+    v.capacity = std::numeric_limits<unsigned>::max(); v.charge = v.capacity - 1;
+    CHECK(std::strcmp(rxhud::make_model(v,true).status.data(),"99%") == 0);
+    v.charge = v.capacity; v.ready = true;
+    CHECK(std::strcmp(rxhud::make_model(v,true).status.data(),"READY") == 0);
 }
 void input_ranges_are_clamped_without_overflow() {
     auto v = view(); v.charge = std::numeric_limits<unsigned>::max();
@@ -240,6 +255,7 @@ int main(int argc,char** argv) {
     const std::pair<const char*,void(*)()> cases[]={
         {"actual charge, ready and timed Drive view",test::real_charge_ready_and_active_time},
         {"visibility, focus, minimized and stale gates",test::visibility_and_invalid_views_fail_closed},
+        {"charging percentage is exact and never claims readiness early",test::charging_readout_reports_actual_progress_without_rounding_to_ready},
         {"unsigned resource/time ranges are bounded",test::input_ranges_are_clamped_without_overflow},
         {"client resize and DPI layout bounds",test::layouts_fit_resizes_and_dpi_without_covering_bottom_edge},
         {"premultiplied raster and real fraction fill",test::raster_has_premultiplied_alpha_and_distinct_actual_fill},

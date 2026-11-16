@@ -642,6 +642,20 @@ void mobility_consumed() {
     player.jump_queued = false;
     player.defense_queued = false;
 }
+void defense_consumed() {
+    // A deliberate defense replaces accepted/older offense, but a later tap
+    // still belongs to the player's next action. Keep its target and deadline.
+    player.committed = 0;
+    player.committed_target = {};
+    player.pending_finisher = 0;
+    if (player.queued && (!queue_live() || static_cast<int>(player.queue_until - player.defense_until) <= 0)) {
+        player.queued = 0;
+        player.queued_target = {};
+    }
+    if (player.jump_queued && (static_cast<int>(player.jump_until - player.defense_until) <= 0 ||
+        static_cast<int>(player.jump_until - input->frame()) < 0)) player.jump_queued = false;
+    player.defense_queued = false;
+}
 bool cancel_open(KhRef actor, KhRef record) {
     if (!record || read<unsigned char>(record, 2) != 0) return false;
     const auto hit = rxmotion::snapshot();
@@ -673,9 +687,11 @@ int post_contact_defense(KhRef actor, KhRef record) {
     if (state < 0) return 0;
     const int result = set_state(actor, state);
     if (!result) return 0;
+    // This cached native setter bypasses change_state. Notify motion only once
+    // the defense was accepted, so an old pursuit cannot outlive its Jump tap.
+    rxmotion::state_changed(actor, state);
     combo_exit(actor, true);
-    clear_queue();
-    player.defense_queued = false;
+    defense_consumed();
     say(state == 8 ? "Kingdom Hearts 358/2 Days: Pragmicat Mix: dodge cancel; combo route preserved." : "Kingdom Hearts 358/2 Days: Pragmicat Mix: guard cancel; combo route preserved.");
     return result;
 }
@@ -862,7 +878,7 @@ KhRef signature_exit(KhRef actor, rxlimit::Finisher, int) {
     if (!recovered) return 0;
     const KhRef result = static_cast<KhRef>(set_state(actor, state));
     combo_exit(actor, true);
-    player.defense_queued = false;
+    defense_consumed();
     return result ? result : recovered;
 }
 void frame_event(const KhEvent* event, void*) {

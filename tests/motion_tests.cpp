@@ -19,6 +19,7 @@ unsigned notifications[2], policy_calls;
 bool allowed, loaded, retired_player, retired_enemy, retired_enemy2;
 int native_damage, native_result, native_outcome;
 KhRef jump_result;
+std::function<void()> during_native_hit;
 int last_state;
 std::string absent, fail;
 float player_pos[3], target_pos[3], target2_pos[3];
@@ -63,6 +64,7 @@ int native_hit(KhRef target, KhRef, KhRef hit) {
         put(target, 0x21a, static_cast<short>(remaining));
         if (!remaining) { if (target == enemy) retired_enemy = true; else retired_enemy2 = true; }
     }
+    if (during_native_hit) during_native_hit();
     return native_result;
 }
 int native_send(KhRef striker, KhRef, KhRef target, KhRef, KhRef) {
@@ -102,7 +104,7 @@ void reset() {
     notifications[0] = notifications[1] = 0;
     allowed = loaded = true; retired_player = retired_enemy = retired_enemy2 = false;
     native_damage = 10; native_result = 1; native_outcome = 0; jump_result = 0; last_state = -1;
-    absent.clear(); fail.clear();
+    absent.clear(); fail.clear(); during_native_hit = {};
     std::fill(player_pos, player_pos + 3, 0.0F);
     target_pos[0] = 5; target_pos[1] = 0; target_pos[2] = 0;
     target2_pos[0] = 5; target2_pos[1] = 0; target2_pos[2] = 1;
@@ -277,6 +279,93 @@ void temporary_control_loss_drops_requests_and_old_hit_confirms() {
         CHECK(!rxmotion::step(actor)); CHECK(!rxmotion::request_chase(actor)); CHECK(states == old_states);
     }
 }
+void resumed_attack_can_confirm_new_contacts_without_restarting() {
+    for (bool aerial : {false, true}) {
+        reset(); attach(); rxmotion::observe_hit(&observe);
+        if (aerial) {
+            put(actor, 0x24, 0u); player_pos[1] = 2;
+            target_pos[0] = 1; target_pos[1] = 2;
+        }
+        rxmotion::attack_started(actor, aerial ? 3 : 11080, aerial ? 1 : 0, !aerial);
+        const auto started = rxmotion::snapshot();
+        allowed = false; auto suspended = rxmotion::snapshot();
+        CHECK(!suspended.confirmed_hit && !suspended.target);
+        allowed = true; ++frame_number; hit();
+        const auto resumed = rxmotion::snapshot();
+        CHECK(resumed.attack_serial == started.attack_serial);
+        CHECK(resumed.attack_id == started.attack_id && resumed.group == started.group);
+        CHECK(resumed.confirmed_hit && resumed.target == target_id && notifications[0] == 1);
+        if (aerial) CHECK(rxmotion::request_enemy_step(actor));
+        else {
+            CHECK(resumed.launcher); CHECK(rxmotion::request_chase(actor));
+            CHECK(!rxmotion::step(actor)); target_pos[1] += 2;
+            CHECK(rxmotion::step(actor));
+        }
+    }
+}
+void resumed_attack_preserves_per_target_observer_deduplication() {
+    reset(); attach(); rxmotion::observe_hit(&observe);
+    rxmotion::observe_hit_secondary(&observe, reinterpret_cast<void*>(1));
+    rxmotion::attack_started(actor, 3, 1); hit();
+    const auto serial = rxmotion::snapshot().attack_serial;
+    CHECK(notifications[0] == 1 && notifications[1] == 1);
+    allowed = false; rxmotion::snapshot(); ++frame_number; rxmotion::snapshot();
+    allowed = true; hit();
+    CHECK(rxmotion::snapshot().confirmed_hit && rxmotion::snapshot().attack_serial == serial);
+    CHECK(notifications[0] == 1 && notifications[1] == 1); // no second credit for this attack/target
+    hit(actor, enemy2); CHECK(notifications[0] == 2 && notifications[1] == 2);
+    rxmotion::attack_started(actor, 12, 1); hit();
+    CHECK(rxmotion::snapshot().attack_serial != serial);
+    CHECK(notifications[0] == 3 && notifications[1] == 3); // a new attack earns its own credit
+}
+void forced_state_retires_the_old_attack_across_suspension() {
+    for (int native_state : {13, 16, 20, 31}) {
+        reset(); attach(); rxmotion::observe_hit(&observe);
+        rxmotion::attack_started(actor, 3, 1);
+        allowed = false; rxmotion::snapshot();
+        rxmotion::state_changed(actor, native_state);
+        allowed = true; hit();
+        CHECK(get<short>(enemy, 0x21a) == 90); // native damage still executes
+        CHECK(!rxmotion::snapshot().attack_serial && !rxmotion::snapshot().confirmed_hit);
+        CHECK(notifications[0] == 0);
+    }
+    for (int native_state : {14, 15, 22}) {
+        reset(); attach(); rxmotion::attack_started(actor, 3, 1);
+        const auto serial = rxmotion::snapshot().attack_serial;
+        rxmotion::state_changed(actor, native_state);
+        CHECK(rxmotion::snapshot().attack_serial == serial); // ordinary native melee transitions
+    }
+}
+void native_hit_reentrancy_cannot_confirm_an_interrupted_or_replaced_attack() {
+    for (int interruption = 0; interruption < 3; ++interruption) {
+        reset(); attach(); rxmotion::observe_hit(&observe);
+        rxmotion::attack_started(actor, 3, 1);
+        const auto old_serial = rxmotion::snapshot().attack_serial;
+        during_native_hit = [interruption] {
+            if (interruption == 0) rxmotion::state_changed(actor, 13);
+            else if (interruption == 1) rxmotion::attack_started(actor, 12, 1);
+            else retired_player = true;
+        };
+        hit(); during_native_hit = {};
+        CHECK(get<short>(enemy, 0x21a) == 90); // original native damage is never suppressed
+        CHECK(!rxmotion::snapshot().confirmed_hit && notifications[0] == 0);
+        if (interruption == 1) {
+            CHECK(rxmotion::snapshot().attack_serial != old_serial);
+            hit(); CHECK(rxmotion::snapshot().confirmed_hit && notifications[0] == 1);
+        }
+    }
+}
+void interrupting_packet_policy(KhRef, KhRef, KhRef, void*) {
+    rxmotion::state_changed(actor, 13);
+}
+void packet_policy_reentrancy_cannot_confirm_the_interrupted_attack() {
+    reset(); attach(); rxmotion::observe_hit(&observe);
+    rxmotion::attack_started(actor, 3, 1);
+    rxmotion::set_packet_policy(&interrupting_packet_policy);
+    hit(); CHECK(get<short>(enemy, 0x21a) == 90);
+    CHECK(!rxmotion::snapshot().attack_serial && !rxmotion::snapshot().confirmed_hit);
+    CHECK(notifications[0] == 0);
+}
 void suspended_actor_retirement_and_scene_unload_still_reset_binding() {
     reset(); attach(); prepare_air_step(); allowed = false; retired_player = true;
     CHECK(rxmotion::snapshot().actor == 0);
@@ -365,6 +454,11 @@ int main() {
         {"Enemy Step spending survives attacks, refreshes on new target or air route", motion_test::enemy_step_spending_survives_new_attacks_but_new_target_or_landing_refreshes},
         {"Enemy Step spending survives control loss until a real landing", motion_test::enemy_step_spending_survives_temporary_control_loss},
         {"control loss drops queued motion and old hit confirms", motion_test::temporary_control_loss_drops_requests_and_old_hit_confirms},
+        {"resumed native attacks confirm fresh contacts without restart", motion_test::resumed_attack_can_confirm_new_contacts_without_restarting},
+        {"resumed attacks preserve per-target observer credit", motion_test::resumed_attack_preserves_per_target_observer_deduplication},
+        {"forced native states retire old attack identity across suspension", motion_test::forced_state_retires_the_old_attack_across_suspension},
+        {"native hit reentrancy cannot credit interrupted or replaced attacks", motion_test::native_hit_reentrancy_cannot_confirm_an_interrupted_or_replaced_attack},
+        {"packet policy reentrancy cannot credit an interrupted attack", motion_test::packet_policy_reentrancy_cannot_confirm_the_interrupted_attack},
         {"suspended actor retirement and scene unload reset motion", motion_test::suspended_actor_retirement_and_scene_unload_still_reset_binding},
         {"accepted Enemy Step survives recovery, expires and consumes once", motion_test::accepted_enemy_step_survives_recovery_until_its_fixed_deadline},
         {"repeated motion requests cannot renew accepted deadlines", motion_test::repeated_motion_requests_do_not_extend_accepted_deadlines},
