@@ -974,6 +974,33 @@ void accepted_signature_survives_an_ending_and_raw_buffer_expiry() {
     CHECK(step(actor)==0x02000000+34*4);during_step={};CHECK(rxlimit::active(actor));
     close();tear_original(original_table);
 }
+void retired_buffered_target_clears_its_native_cache_without_stopping_the_chain() {
+    for(bool committed:{false,true}) {
+        reset();launch();build_player();CHECK(select_move(original_table,0,false));
+        put(actor,0x4f0,static_cast<unsigned char>(1));put(actor,0x4f1,static_cast<unsigned char>(7));
+        put(actor,0x4f2,static_cast<unsigned char>(2));put(actor,0x4fc,actor+0x3800);
+        put(actor,0x500,0xdeadbeefu);pad_pressed=KH_BUTTON_A;sample_input(actor);
+        CHECK(player.queued_target.handle==9001);
+        if(committed) {
+            const KhRef rr=active_record();put(rr,0x10,10*4096);put(rr,0x14,20*4096);
+            put(actor,0x7b0,10*4096);CHECK(step(actor)==0);
+            CHECK(player.committed_target.handle==9001);
+        }
+        // The SDK generation retires, but the native target and collision-part
+        // cache can still contain its old address until the next resolver pass.
+        target_handle_live=false;const auto attacks=flow_stub::motion_starts;
+        CHECK(select_move(original_table,0,false));CHECK(player.active_move==1060);
+        CHECK(flow_stub::motion_starts==attacks+1&&resolve_calls==0);
+        for(unsigned x=0;x<0x18;++x)CHECK(get<unsigned char>(actor,0x4f0+x)==0);
+        close();tear_original(original_table);
+    }
+    reset();launch();build_player();CHECK(select_move(original_table,0,false));
+    put(actor,0x4f0,static_cast<unsigned char>(1));put(actor,0x4fc,actor+0x3800);
+    put(actor,0x500,actor+0x3a00);offer(rxroutes::Action::Light); // no captured target
+    CHECK(select_move(original_table,0,false));CHECK(resolve_calls==0);
+    CHECK(get<unsigned char>(actor,0x4f0)==1&&get<KhRef>(actor,0x500)==actor+0x3a00);
+    close();tear_original(original_table);
+}
 void buffered_defense_cannot_become_a_native_heavy_branch() {
     reset();launch();build_player();CHECK(select_move(original_table,0,false));
     put(actor,0x24,4u);put(actor,0x7b0,1*4096);
@@ -1115,6 +1142,7 @@ int main() {
       {"new chase acceptance preserves a waiting queue without renewed requests",test::newly_accepted_chase_waits_without_retiring_or_reaccepting_its_tap},
       {"a second defensive movement clears the saved attack route",test::a_second_defensive_movement_cannot_bank_the_old_combo_route},
       {"committed target resolves fresh and refuses retired/reused generations",test::committed_target_is_resolved_fresh_and_stale_generations_are_not_restored},
+      {"retired buffered targets clear native caches while combos and uncaptured targeting continue",test::retired_buffered_target_clears_its_native_cache_without_stopping_the_chain},
       {"accepted signature remains committed across ending recovery and raw expiry",test::accepted_signature_survives_an_ending_and_raw_buffer_expiry},
       {"buffered defense cannot fall through into a native heavy branch",test::buffered_defense_cannot_become_a_native_heavy_branch},
       {"grounded jump exit keeps native launch and horizontal momentum",test::grounded_jump_exit_uses_native_launch_and_preserves_momentum},

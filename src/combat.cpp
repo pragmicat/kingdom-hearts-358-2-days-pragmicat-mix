@@ -348,12 +348,15 @@ void teardown(KhRef table) {
 struct Choice { int bank = -1; const Move* move = nullptr; };
 void apply_intended_target() {
     const auto& intent = player.committed ? player.committed_target : player.queued_target;
-    if (!intent.handle || !actors->kind || !actors->ref || actors->kind(intent.handle) != KH_ACTOR_ENEMY) return;
+    if (!intent.handle) return; // Uncaptured inputs retain native targeting.
+    // Clear cached native actor/part addresses even when the captured handle
+    // has retired. An invalid buffered target must not leave a stale pick live.
+    std::memset(bytes(player.actor) + 0x4f0, 0, 0x18);
+    if (!actors->kind || !actors->ref || actors->kind(intent.handle) != KH_ACTOR_ENEMY) return;
     const KhRef expected = actors->ref(intent.handle);
     if (!expected || !bytes(expected)) return;
     // Store identity, not a borrowed collision-part pointer. Resolve the part
     // again through the game's live list and verify the generation-safe actor.
-    std::memset(bytes(player.actor) + 0x4f0, 0, 0x18);
     std::memcpy(bytes(player.actor) + 0x4f0, intent.identity.data(), intent.identity.size());
     resolve_target_pick(player.actor);
     if (read<unsigned char>(player.actor, 0x4f0) != 1 || read<KhRef>(player.actor, 0x4fc) != expected)

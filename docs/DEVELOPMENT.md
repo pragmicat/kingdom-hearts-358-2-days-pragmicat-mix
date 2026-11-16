@@ -6,12 +6,18 @@ Source version is **0.3.3**, targeting Yokimitsuro's native Days PC port **0.1.5
 This source review branch omits artwork. Windows packaging needs its original
 artwork assets integrated, followed by a fresh build and validation.
 
-Latest practice flow adds a Mixed-preset repeat mode and a manual next-group
+The practice flow pass adds a Mixed-preset repeat mode and a manual next-group
 action. Neither interrupts play when toggling repeat; skipping queues the
 existing guarded reset and preserves fixed presets and field ownership.
 All 24 practice Lua groups pass, including repetition, resumed progression,
-paused/manual skips, fixed presets and out-of-scope actors. Production C++ is
-unchanged from the visible UI pass; native gameplay remains unverified.
+paused/manual skips, fixed presets and out-of-scope actors. That practice-only
+change left C++ untouched; later controller follow-ups are recorded below.
+
+The target-retirement follow-up passes **59 controller flow cases**. A captured
+target's native actor/part cache is now cleared even if its SDK handle has
+retired before attack selection. Queued and committed follow-ups still advance
+the combo; inputs without captured targets preserve native targeting. The new
+regression failed before the fix. Native gameplay remains unverified.
 
 ## Aim of each pass
 
