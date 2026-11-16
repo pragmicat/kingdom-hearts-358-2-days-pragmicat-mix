@@ -69,6 +69,14 @@ bool should_show(const Model& model, bool enabled, bool visible, bool minimized,
     return model.mode != Mode::Hidden && enabled && visible && !minimized && focused && fresh;
 }
 namespace {
+int fill_width(float fraction, int width) noexcept {
+    if (width <= 0 || !std::isfinite(fraction) || fraction <= 0) return 0;
+    if (fraction >= 1) return width;
+    if (width == 1) return 0;
+    // Reserve empty/full silhouettes for actual endpoints. Keep a positive
+    // amount visible, including the final active tick, at small window sizes.
+    return std::clamp(static_cast<int>(width * fraction), 1, width - 1);
+}
 struct Color { unsigned r, g, b, a; };
 void over(std::uint32_t& pixel, Color color) {
     const unsigned inverse = 255 - color.a;
@@ -227,8 +235,7 @@ Image render(const Model& model, const Layout& layout) noexcept {
     const auto track = layout.track;
     rectangle(image, {track.x - unit, track.y - unit, track.width + 2 * unit, track.height + 2 * unit}, {68,98,121,255});
     rectangle(image, track, {3,10,18,255});
-    const float fraction = std::isfinite(model.fraction) ? std::clamp(model.fraction, 0.0F, 1.0F) : 0.0F;
-    const int filled = static_cast<int>(std::lround(track.width * fraction));
+    const int filled = fill_width(model.fraction, track.width);
     if (filled > 0) {
         rectangle(image, {track.x, track.y, filled, track.height}, accent);
         rectangle(image, {track.x, track.y, filled, unit},
@@ -501,7 +508,7 @@ DWORD run_ui(Shared& state) {
             painted = false;
             if (!hud) continue;
         }
-        const PaintKey key{model.mode, static_cast<int>(std::lround(model.fraction * layout.track.width)),
+        const PaintKey key{model.mode, fill_width(model.fraction, layout.track.width),
                            layout.panel.width, layout.panel.height, layout.font_px, model.seconds, model.status};
         if (!painted || !(key == last)) {
             const Image image = render(model, layout);

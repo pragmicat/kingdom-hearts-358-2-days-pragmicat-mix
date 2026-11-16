@@ -6,6 +6,14 @@ Source version is **0.3.3**, targeting Yokimitsuro's native Days PC port **0.1.5
 This source review branch omits artwork. Windows packaging needs its original
 artwork assets integrated, followed by a fresh build and validation.
 
+The charge-raster follow-up passes **11 HUD cases**. Pixel fill now reserves
+empty/full silhouettes for zero/full fractions: partial charge keeps an empty
+edge, while positive charge and the final active tick retain visible fill at
+small window sizes. The Windows repaint key uses the same bounded calculation.
+The pixel regression failed before the fix and covers multiple sizes/DPI values.
+The offscreen renderer preview was inspected; native overlay composition and
+contrast against actual battle backgrounds remain unverified.
+
 The practice-completion pass adds one native notice when a cleared drill enters
 **Wait for Restart**, naming the planned next group and the restart action. The
 same message remains available from Encounter status. Automatic encounters and

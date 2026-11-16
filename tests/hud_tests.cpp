@@ -106,6 +106,27 @@ void raster_has_premultiplied_alpha_and_distinct_actual_fill() {
     CHECK(rxhud::render({},layout).pixels.empty());
     auto invalid = layout; invalid.panel.width = 100000; CHECK(rxhud::render(rxhud::make_model(v,true),invalid).pixels.empty());
 }
+void raster_distinguishes_empty_partial_and_full_charge() {
+    for (const auto size : {std::pair{280,180},{1280,720},{3840,2160}})
+    for (unsigned dpi : {96u,192u,384u}) {
+        const auto layout=rxhud::make_layout(size.first,size.second,dpi);
+        auto v=view();const auto empty=rxhud::render(rxhud::make_model(v,true),layout);
+        const auto at=[&](const rxhud::Image& image,int x) {
+            return image.pixels[static_cast<std::size_t>(layout.track.y+layout.track.height/2)*image.width+layout.track.x+x];
+        };
+        v.charge=999;const auto partial=rxhud::render(rxhud::make_model(v,true),layout);
+        CHECK(at(partial,layout.track.width-1)==at(empty,layout.track.width-1));
+        v.charge=1;const auto started=rxhud::render(rxhud::make_model(v,true),layout);
+        CHECK(at(started,0)!=at(empty,0));
+        v.charge=v.capacity;v.ready=true;const auto full=rxhud::render(rxhud::make_model(v,true),layout);
+        CHECK(at(full,layout.track.width-1)!=at(empty,layout.track.width-1));
+        v.phase=rxdrive::Phase::Active;v.remaining_ticks=1;
+        const auto ending=rxhud::render(rxhud::make_model(v,true),layout);
+        CHECK(at(ending,0)!=at(empty,0));
+        v.remaining_ticks=0;const auto ended=rxhud::render(rxhud::make_model(v,true),layout);
+        CHECK(at(ended,0)==at(empty,0));
+    }
+}
 std::array<rxhud::Model,9> display_states() {
     std::array<rxhud::Model,9> result{};
     auto v=view();
@@ -344,6 +365,7 @@ int main(int argc,char** argv) {
         {"unsigned resource/time ranges are bounded",test::input_ranges_are_clamped_without_overflow},
         {"client resize and DPI layout bounds",test::layouts_fit_resizes_and_dpi_without_covering_bottom_edge},
         {"premultiplied raster and real fraction fill",test::raster_has_premultiplied_alpha_and_distinct_actual_fill},
+        {"charge raster distinguishes empty, partial, full and last active tick",test::raster_distinguishes_empty_partial_and_full_charge},
         {"portable pixel glyphs are visible, crisp and contained",test::portable_glyphs_are_visible_crisp_and_contained},
         {"all HUD states fit small windows, high DPI and long timers",test::every_state_fits_minimum_windows_dpi_and_long_timers},
         {"last three seconds use a steady warm cue",test::low_time_uses_a_steady_warm_cue_without_changing_timer},
