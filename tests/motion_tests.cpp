@@ -19,7 +19,7 @@ unsigned notifications[2], policy_calls;
 bool allowed, loaded, retired_player, retired_enemy, retired_enemy2;
 int native_damage, native_result, native_outcome;
 KhRef jump_result;
-std::function<void()> during_native_hit;
+std::function<void()> during_native_hit, during_state_change, during_native_jump;
 int last_state;
 std::string absent, fail;
 float player_pos[3], target_pos[3], target2_pos[3];
@@ -77,11 +77,13 @@ KhRef native_jump(KhRef object) {
     ++original_jumps;
     put(object, 0x498, get<int>(object, 0x498) + 100);
     put(object, 0x4a0, get<int>(object, 0x4a0) + 200);
+    if (during_native_jump) during_native_jump();
     return jump_result;
 }
 KhRef set_state(KhRef object, int state) {
     CHECK(object == actor); ++states; last_state = state;
     put(object, 0x2bb2, static_cast<signed char>(2));
+    if (during_state_change) during_state_change();
     return 0x02000000u + 4u * static_cast<unsigned>(state);
 }
 void* routine(const char* name, int*) { return absent == name || !funcs.count(name) ? nullptr : funcs.at(name); }
@@ -104,7 +106,7 @@ void reset() {
     notifications[0] = notifications[1] = 0;
     allowed = loaded = true; retired_player = retired_enemy = retired_enemy2 = false;
     native_damage = 10; native_result = 1; native_outcome = 0; jump_result = 0; last_state = -1;
-    absent.clear(); fail.clear(); during_native_hit = {};
+    absent.clear(); fail.clear(); during_native_hit = {}; during_state_change = {}; during_native_jump = {};
     std::fill(player_pos, player_pos + 3, 0.0F);
     target_pos[0] = 5; target_pos[1] = 0; target_pos[2] = 0;
     target2_pos[0] = 5; target2_pos[1] = 0; target2_pos[2] = 1;
@@ -238,6 +240,56 @@ void enemy_step_is_native_mobility_with_no_extra_hit_or_camera_change() {
             (i >= actor + 0x2bb4 && i < actor + 0x2bb8) || (i >= actor + 0x2bc0 && i < actor + 0x2bc4);
         CHECK(motion_field || memory[i] == before[i]);
     }
+}
+void interrupted_native_transitions_keep_the_replacement_motion() {
+    for (bool chase : {false, true}) for (int interruption = 0; interruption < 5; ++interruption) {
+        reset(); attach();
+        if (chase) {
+            rxmotion::attack_started(actor, 11080, 0, true); hit(); target_pos[1] = 2;
+            CHECK(rxmotion::request_chase(actor));
+        } else {
+            prepare_air_step(); CHECK(rxmotion::request_enemy_step(actor));
+        }
+        during_state_change = [interruption] {
+            if (interruption == 0) rxmotion::state_changed(actor, 20);
+            if (interruption == 1) rxmotion::attack_started(actor, 5, 1);
+            if (interruption == 2) retired_player = true;
+            if (interruption == 3) allowed = false;
+            if (interruption == 4) rxmotion::reset();
+            put(actor, 0x58, 777); put(actor, 0x2bb2, static_cast<signed char>(7));
+        };
+        CHECK(rxmotion::step(actor) == 0x02000008u); // keep the native return
+        CHECK(get<int>(actor, 0x58) == 777 && get<signed char>(actor, 0x2bb2) == 7);
+        const auto s = rxmotion::snapshot();
+        CHECK(!s.chasing && !s.chase_queued && !s.enemy_step_queued);
+        if (interruption == 1) CHECK(s.attack_id == 5);
+    }
+}
+void interrupted_native_jump_preserves_replacement_velocity() {
+    for (int interruption = 0; interruption < 3; ++interruption) {
+        reset(); attach(); rxmotion::attack_started(actor, 11080, 0, true); hit();
+        target_pos[1] = 2; CHECK(rxmotion::request_chase(actor)); CHECK(rxmotion::step(actor));
+        during_native_jump = [interruption] {
+            if (interruption == 0) rxmotion::state_changed(actor, 20);
+            if (interruption == 1) rxmotion::attack_started(actor, 5, 1);
+            if (interruption == 2) rxmotion::reset();
+            put(actor, 0x498, 888); put(actor, 0x4a0, 999); put(actor, 0x58, 777);
+        };
+        CHECK(jump() == 0);
+        CHECK(get<int>(actor, 0x498) == 888 && get<int>(actor, 0x4a0) == 999 && get<int>(actor, 0x58) == 777);
+        CHECK(!rxmotion::snapshot().chasing);
+    }
+}
+void replacement_air_request_survives_the_outgoing_transition() {
+    reset(); attach(); prepare_air_step(); CHECK(rxmotion::request_enemy_step(actor));
+    during_state_change = [] { prepare_air_step(enemy2); CHECK(rxmotion::request_enemy_step(actor)); };
+    CHECK(rxmotion::step(actor));
+    const auto replacement = rxmotion::snapshot();
+    CHECK(replacement.enemy_step_queued && replacement.target == target2_id);
+    CHECK(get<signed char>(actor, 0x2bb2) == 2); // no outgoing impulse
+    during_state_change = {};
+    CHECK(rxmotion::step(actor)); CHECK(get<int>(actor, 0x58) == 2048);
+    CHECK(!rxmotion::snapshot().enemy_step_queued);
 }
 void enemy_step_spending_survives_new_attacks_but_new_target_or_landing_refreshes() {
     reset(); attach(); prepare_air_step(); CHECK(rxmotion::request_enemy_step(actor)); CHECK(rxmotion::step(actor));
@@ -451,6 +503,9 @@ int main() {
         {"wall stall, timeout, new attack and forced-state cancellation", motion_test::collision_stall_timeout_and_attack_interrupt_end_chase},
         {"actor handles, target range, native return and reset guards", motion_test::lifetime_distance_and_native_transition_guards},
         {"Enemy Step uses native mobility without damage or camera writes", motion_test::enemy_step_is_native_mobility_with_no_extra_hit_or_camera_change},
+        {"interrupted native transitions retain replacement motion", motion_test::interrupted_native_transitions_keep_the_replacement_motion},
+        {"interrupted native jump retains replacement velocity", motion_test::interrupted_native_jump_preserves_replacement_velocity},
+        {"replacement Enemy Step request survives outgoing transition", motion_test::replacement_air_request_survives_the_outgoing_transition},
         {"Enemy Step spending survives attacks, refreshes on new target or air route", motion_test::enemy_step_spending_survives_new_attacks_but_new_target_or_landing_refreshes},
         {"Enemy Step spending survives control loss until a real landing", motion_test::enemy_step_spending_survives_temporary_control_loss},
         {"control loss drops queued motion and old hit confirms", motion_test::temporary_control_loss_drops_requests_and_old_hit_confirms},

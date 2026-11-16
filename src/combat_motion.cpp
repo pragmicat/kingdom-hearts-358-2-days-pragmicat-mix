@@ -63,6 +63,9 @@ bool live(KhRef actor) {
     return current && current == player_handle && actors->ref(current) == actor;
 }
 bool valid(KhRef actor) { return live(actor) && permitted && permitted(actor); }
+bool same_attack(KhRef actor, KhActor handle, unsigned serial) {
+    return state.actor == actor && player_handle == handle && state.attack_serial == serial;
+}
 bool target_position(float at[3]) {
     if (!state.target || actors->kind(state.target) != KH_ACTOR_ENEMY || !actors->ref(state.target)) return false;
     int hp = 0, maximum = 0;
@@ -220,8 +223,15 @@ KhRef jump(KhRef actor) {
     last_distance = distance;
     have_previous = true;
     const int old_x = get<int>(actor, 0x498), old_z = get<int>(actor, 0x4a0);
+    const KhActor chasing_player = player_handle, chasing_target = state.target;
+    const unsigned chasing_serial = state.attack_serial;
     const KhRef result = original_jump(actor);
-    if (result || !valid(actor)) { stop_chase(); return result; }
+    // Native callbacks can interrupt, replace or retire this action. Never
+    // overwrite its replacement's velocity or clear a newer movement request.
+    if (!same_attack(actor, chasing_player, chasing_serial)) return result;
+    if (result || !valid(actor) || !state.chasing || state.target != chasing_target) {
+        stop_chase(); return result;
+    }
     const float travel = std::min(0.65F, std::max(0.0F, distance - 1.05F));
     const float inv = distance > 0.0001F ? 1.0F / distance : 0.0F;
     const int step_x = static_cast<int>(dx * inv * travel * 4096.0F);
@@ -359,6 +369,8 @@ KhRef step(KhRef actor) {
     if (!valid(actor) || state.target != request_target ||
         static_cast<int>(request_until - now()) < 0) { stop_chase(); return 0; }
     track_landing();
+    const KhActor accepted_player = player_handle;
+    const unsigned accepted_serial = state.attack_serial;
     if (state.enemy_step_queued) {
         float from[3], target[3];
         // Hit freshness accepted this input; recovery consumes its fixed queue
@@ -366,7 +378,10 @@ KhRef step(KhRef actor) {
         if (!step_target_eligible(from, target, false)) { stop_chase(); return 0; }
         const KhActor used_target = state.target;
         const KhRef result = set_state(actor, 2);
-        if (!result) { stop_chase(); return 0; }
+        if (!same_attack(actor, accepted_player, accepted_serial)) return result;
+        if (!result || !valid(actor) || !state.enemy_step_queued || state.target != used_target) {
+            stop_chase(); return result;
+        }
         put<signed char>(actor, 0x2bb2, 1);
         put<unsigned char>(actor, 0x2bb0, 0);
         put<int>(actor, 0x2bb4, 0);
@@ -387,8 +402,12 @@ KhRef step(KhRef actor) {
     // State2 builds the game's ordinary falling/jump controller through the
     // actor's own pre-draw hook, preserving each Roxas overlay. Change its jump
     // phase to rising after initialization; physics and collision still run.
+    const KhActor chased_target = state.target;
     const KhRef result = set_state(actor, 2);
-    if (!result) { stop_chase(); return 0; }
+    if (!same_attack(actor, accepted_player, accepted_serial)) return result;
+    if (!result || !valid(actor) || !state.chase_queued || state.target != chased_target) {
+        stop_chase(); return result;
+    }
     put<signed char>(actor, 0x2bb2, 1);
     put<int>(actor, 0x2bb4, 0);
     put<int>(actor, 0x58, static_cast<int>(std::clamp(dy * 0.20F, 0.25F, 0.65F) * 4096.0F));

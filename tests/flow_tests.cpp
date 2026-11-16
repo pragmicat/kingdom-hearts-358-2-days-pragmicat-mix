@@ -864,6 +864,22 @@ void accepted_motion_queue_can_finish_after_raw_jump_expiry() {
         close();tear_original(original_table);
     }
 }
+void replaced_motion_transition_keeps_new_action_intentions() {
+    reset();launch();build_player();CHECK(select_move(original_table,1,false));
+    put(actor,0x7b0,6*4096);flow_stub::confirm(actor,player.active_move,pad_frame);
+    flow_stub::motion.enemy_step_queued=true;flow_stub::native_motion_return=0x0200abcd;
+    const auto resets=flow_stub::anim_resets;
+    ++pad_frame;put(actor,0x7b0,7*4096); // advance past the hit's animation frame
+    flow_stub::during_motion_step=[] {
+        ++flow_stub::motion.attack_serial;
+        player.committed=2;player.jump_queued=player.defense_queued=true;
+        player.resume_route=false;
+    };
+    CHECK(step(actor)==0x0200abcd);
+    CHECK(player.committed==2&&player.jump_queued&&player.defense_queued&&!player.resume_route);
+    CHECK(flow_stub::anim_resets==resets);
+    close();tear_original(original_table);
+}
 void retired_motion_queue_cannot_reaccept_an_old_long_jump_buffer() {
     for(bool chase:{false,true}) {
         reset();launch();build_player();CHECK(select_move(original_table,chase?0:1,false));
@@ -1136,6 +1152,7 @@ int main() {
       {"frame-only defense tap reaches one eligible native exit",[]{test::frame_only_mobility_tap_reaches_one_eligible_exit(KH_BUTTON_Y);}},
       {"frame sampling keeps dedupe, expiry, pause and cinematic gates",test::frame_sampling_deduplicates_and_keeps_expiry_and_control_gates},
       {"accepted motion queue survives raw Jump expiry and consumes once",test::accepted_motion_queue_can_finish_after_raw_jump_expiry},
+      {"replaced motion transition preserves new action intentions",test::replaced_motion_transition_keeps_new_action_intentions},
       {"retired motion queue cannot renew an old long Jump buffer",test::retired_motion_queue_cannot_reaccept_an_old_long_jump_buffer},
       {"retiring accepted motion preserves a newer frame-only Jump tap",test::retired_motion_queue_preserves_a_newer_frame_only_jump_tap},
       {"immediately rejected new motion cannot reuse its original Jump tap",test::newly_accepted_motion_rejection_retires_its_original_jump_tap},

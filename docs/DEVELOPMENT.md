@@ -6,6 +6,14 @@ Source version is **0.3.3**, targeting Yokimitsuro's native Days PC port **0.1.5
 This source review branch omits artwork. Windows packaging needs its original
 artwork assets integrated, followed by a fresh build and validation.
 
+The aerial-transition follow-up passes **27 motion cases** and **60 controller
+flow cases**. Pursuit and Enemy Step recheck the attack/actor identity after
+native callbacks before applying impulses or consuming movement. Interrupted
+transitions preserve replacement velocity and newer Enemy Step requests; the
+controller also avoids clearing the replacement combo and input. Four new
+regressions failed before their fixes. These are mock-host checks; actual
+controller feel and native transitions still need gameplay validation.
+
 Practice now offers **After clearing → Wait for Restart**. The optional break
 leaves the empty arena, health and position untouched until a manual reset;
 automatic encounters remain the default. Mixed groups advance once on clear,

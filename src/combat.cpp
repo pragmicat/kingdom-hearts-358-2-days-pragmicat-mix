@@ -768,12 +768,19 @@ int step(KhRef actor) {
             if (requested) player.motion_jump_intent = player.jump_intent;
         }
         if (requested && can_cancel) {
-            if (const KhRef chase = rxmotion::step(actor)) {
-                combo_exit(actor, true);
-                mobility_consumed();
+            const KhRef chase = rxmotion::step(actor);
+            const auto remaining = rxmotion::snapshot();
+            if (chase) {
+                // The native transition may have replaced this attack or actor.
+                // Return its state reference without exiting the replacement's
+                // combo or consuming input captured for that newer action.
+                if (actor == player.actor && controllable(actor) && remaining.actor == actor &&
+                    remaining.attack_serial == hit.attack_serial) {
+                    combo_exit(actor, true);
+                    mobility_consumed();
+                }
                 return static_cast<int>(chase);
             }
-            const auto remaining = rxmotion::snapshot();
             if (!remaining.chase_queued && !remaining.enemy_step_queued &&
                 player.jump_intent == player.motion_jump_intent)
                 player.jump_queued = false; // a rejected/expired accepted tap cannot renew itself

@@ -24,6 +24,7 @@ inline unsigned chase_requests, step_requests, motion_steps, serial;
 inline unsigned rules_binds, rules_refreshes, rules_forgets, rules_starts, rules_hits, policy_calls;
 inline unsigned anim_links, anim_resets, drive_frames, drive_requests, drive_hits, hud_updates;
 inline KhRef native_motion_return, native_magic_return;
+inline void (*during_motion_step)();
 inline bool request_allowed, magic_contacts_finished, replacing;
 inline bool motion_queue_rejected;
 inline bool hud_running, hud_visible;
@@ -42,6 +43,7 @@ inline void reset() {
     rules_binds = rules_refreshes = rules_forgets = rules_starts = rules_hits = policy_calls = 0;
     anim_links = anim_resets = drive_frames = drive_requests = drive_hits = hud_updates = 0;
     native_motion_return = native_magic_return = 0; request_allowed = true;
+    during_motion_step = nullptr;
     motion_queue_rejected = false;
     magic_contacts_finished = replacing = false;
     hud_running = hud_visible = false;
@@ -90,6 +92,7 @@ KhRef step(KhRef) {
     // rejection/expiry. Its independent suite verifies those native conditions.
     if (flow_stub::native_motion_return || flow_stub::motion_queue_rejected)
         flow_stub::motion.chase_queued = flow_stub::motion.enemy_step_queued = false;
+    if (flow_stub::during_motion_step) flow_stub::during_motion_step();
     return flow_stub::native_motion_return;
 }
 Snapshot snapshot() { return flow_stub::motion; }
