@@ -6,6 +6,14 @@ Source version is **0.3.3**, targeting Yokimitsuro's native Days PC port **0.1.5
 This source review branch omits artwork. Windows packaging needs its original
 artwork assets integrated, followed by a fresh build and validation.
 
+The crowd-contact follow-up passes **30 motion cases**. Pursuit, Enemy Step and
+launcher-rise confirmation now use the last hit on their chosen target, rather
+than the latest hit anywhere in a sweep. Unrelated crowd contacts cannot revive
+an expired mobility opportunity. Fresh hits on that target still renew it;
+all damage/observer credit and accepted movement deadlines remain intact. Two
+new regressions failed before the fix, with a third protecting queued movement
+at its deadline. Native crowd combat remains a gameplay validation priority.
+
 The aerial-transition follow-up passes **27 motion cases** and **60 controller
 flow cases**. Pursuit and Enemy Step recheck the attack/actor identity after
 native callbacks before applying impulses or consuming movement. Interrupted

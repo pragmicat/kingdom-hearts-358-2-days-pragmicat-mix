@@ -448,6 +448,42 @@ void repeated_motion_requests_do_not_extend_accepted_deadlines() {
     frame_number += 9; CHECK(!rxmotion::step(actor)); CHECK(states == 0);
     CHECK(!rxmotion::snapshot().chase_queued);
 }
+void crowd_contacts_do_not_refresh_another_targets_mobility_window() {
+    for (bool chase : {false, true}) {
+        reset(); attach(); rxmotion::observe_hit(&observe);
+        if (chase) {
+            rxmotion::attack_started(actor, 11080, 0, true); hit();
+        } else prepare_air_step();
+        frame_number += chase ? 31 : 25;
+        hit(actor, enemy2);
+        const auto sweep = rxmotion::snapshot();
+        CHECK(sweep.target == target_id && sweep.hit_frame == frame_number);
+        CHECK(sweep.damage == 20 && notifications[0] == 2); // both contacts still count
+        CHECK(!(chase ? rxmotion::request_chase(actor) : rxmotion::request_enemy_step(actor)));
+        hit(); // a fresh contact with the actual target does renew its opportunity
+        CHECK(chase ? rxmotion::request_chase(actor) : rxmotion::request_enemy_step(actor));
+    }
+}
+void crowd_contacts_cannot_confirm_a_late_rise_for_an_old_launcher_target() {
+    reset(); attach(); rxmotion::attack_started(actor, 11080, 0, true); hit();
+    frame_number += 37; target_pos[1] = 2; hit(actor, enemy2);
+    CHECK(!rxmotion::snapshot().launcher_confirmed);
+    hit(); CHECK(rxmotion::snapshot().launcher_confirmed);
+}
+void accepted_crowd_mobility_keeps_its_original_target_and_deadline() {
+    for (bool chase : {false, true}) for (bool expired : {false, true}) {
+        reset(); attach();
+        if (chase) {
+            rxmotion::attack_started(actor, 11080, 0, true); hit(); target_pos[1] = 2;
+            CHECK(rxmotion::request_chase(actor));
+        } else { prepare_air_step(); CHECK(rxmotion::request_enemy_step(actor)); }
+        frame_number += chase ? 18 : 12;
+        hit(actor, enemy2);
+        CHECK(rxmotion::snapshot().target == target_id);
+        if (expired) ++frame_number;
+        CHECK((rxmotion::step(actor) != 0) == !expired);
+    }
+}
 void accepted_enemy_step_rechecks_live_execution_conditions() {
     for (int gate = 0; gate < 7; ++gate) {
         reset(); attach(); prepare_air_step(); frame_number += 24;
@@ -517,6 +553,9 @@ int main() {
         {"suspended actor retirement and scene unload reset motion", motion_test::suspended_actor_retirement_and_scene_unload_still_reset_binding},
         {"accepted Enemy Step survives recovery, expires and consumes once", motion_test::accepted_enemy_step_survives_recovery_until_its_fixed_deadline},
         {"repeated motion requests cannot renew accepted deadlines", motion_test::repeated_motion_requests_do_not_extend_accepted_deadlines},
+        {"crowd contacts cannot refresh another target's mobility window", motion_test::crowd_contacts_do_not_refresh_another_targets_mobility_window},
+        {"crowd contacts cannot confirm a late rise for an old launcher target", motion_test::crowd_contacts_cannot_confirm_a_late_rise_for_an_old_launcher_target},
+        {"accepted crowd mobility keeps original target and deadline", motion_test::accepted_crowd_mobility_keeps_its_original_target_and_deadline},
         {"accepted Enemy Step rechecks live execution conditions", motion_test::accepted_enemy_step_rechecks_live_execution_conditions},
         {"accepted motion stays bound to its target across later crowd hits", motion_test::accepted_motion_cannot_redirect_to_a_later_crowd_hit},
         {"Enemy Step ground, range, cooldown and target lifetime guards", motion_test::enemy_step_rechecks_ground_range_cooldown_and_target_lifetime}

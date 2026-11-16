@@ -7,6 +7,7 @@
 | Dodge into a follow-up | Defense preserves newer attack/Jump taps, target and direction while consuming replaced inputs | Controller regressions reproduce lost attacks and stale Jump requests |
 | Pause during an attack | The continuing attack can confirm fresh damage after resume without granting duplicate resource credit | Motion regressions check native damage, observer credit and forced interruption |
 | Interrupted aerial transitions | Recheck actor/attack identity after native callbacks before applying pursuit/Enemy Step impulses or clearing combo input | Regressions reproduce stale velocity writes and lost replacement requests; ordinary native transitions remain covered |
+| Predictable crowd mobility | Keep pursuit/Enemy Step freshness tied to the chosen target's hit rather than later contacts on other enemies | Two regressions reproduce unrelated-hit timer renewal; accepted requests keep their original target and deadline |
 | Reliable practice reset | Verify target removal, retry temporary refusals, then reset position and spawn once; offer manual retry after a persistent refusal | Practice regressions cover partial removal, retry, pause and changed field |
 | Readable Drive progress | Show charge percentage before READY, then existing queued/active states | HUD model checks rounding, full charge and large capacities |
 | Understandable commands | Separate grounded launcher/pursuit from airborne Enemy Step and document directional Techniques and normal magic selection | Control guide matches the current route and spell adapters |

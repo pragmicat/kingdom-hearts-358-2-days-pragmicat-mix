@@ -24,6 +24,7 @@ Snapshot state;
 KhActor player_handle;
 unsigned serial_counter;
 unsigned request_until, chase_start;
+unsigned target_hit_frame;
 KhActor request_target;
 KhRef scoped_attacker;
 KhRef scoped_target;
@@ -84,6 +85,7 @@ void stop_chase() {
 void clear_hit_confirmation() {
     state.target = 0;
     state.hit_frame = 0;
+    target_hit_frame = 0;
     state.damage = 0;
     state.confirmed_hit = state.blocked = state.answered = state.launcher_confirmed = false;
     stop_chase();
@@ -97,7 +99,7 @@ void track_landing() {
 bool step_target_eligible(float from[3], float target[3], bool fresh_hit = true) {
     if (!valid(state.actor) || !state.confirmed_hit || state.group != 1 ||
         (get<unsigned>(state.actor, 0x24) & 4u) != 0 ||
-        (fresh_hit && static_cast<unsigned>(now() - state.hit_frame) > 24) ||
+        (fresh_hit && static_cast<unsigned>(now() - target_hit_frame) > 24) ||
         (step_cooldown && static_cast<unsigned>(now() - last_step_frame) < 20) ||
         !target_position(target) || actors->position(player_handle, from) != KH_OK || !finite(from)) return false;
     const KhRef enemy = actors->ref(state.target);
@@ -112,7 +114,7 @@ bool step_target_eligible(float from[3], float target[3], bool fresh_hit = true)
 }
 void refresh_launch() {
     if (!state.launcher || !state.confirmed_hit || state.launcher_confirmed ||
-        static_cast<unsigned>(now() - state.hit_frame) > 36) return;
+        static_cast<unsigned>(now() - target_hit_frame) > 36) return;
     float target[3];
     if (target_position(target) && target[1] - target_at_hit[1] >= 0.15F)
         state.launcher_confirmed = true;
@@ -174,6 +176,9 @@ int apply_hit(KhRef enemy, KhRef source, KhRef packet) {
             std::copy(at, at + 3, target_at_hit);
             state.launcher_confirmed = false;
         }
+        // Later collision slots still contribute damage and resource credit,
+        // but only contact with the chosen target refreshes its mobility window.
+        if (state.target == target) target_hit_frame = now();
         notify_hit(target);
     }
     return result;
@@ -308,6 +313,7 @@ void attack_started(KhRef actor, int id, int group, bool launcher) {
     state.attack_id = id;
     state.group = group;
     state.launcher = launcher;
+    target_hit_frame = 0;
     notified = {}; notified_count = 0;
 }
 void state_changed(KhRef actor, int native_state) {
@@ -333,7 +339,7 @@ void state_changed(KhRef actor, int native_state) {
 }
 bool request_chase(KhRef actor) {
     if (!valid(actor) || !state.confirmed_hit || !state.launcher || !state.target ||
-        (!state.chase_queued && static_cast<unsigned>(now() - state.hit_frame) > 30)) return false;
+        (!state.chase_queued && static_cast<unsigned>(now() - target_hit_frame) > 30)) return false;
     float target[3];
     if (!target_position(target)) return false;
     if (state.chase_queued) {
@@ -437,6 +443,7 @@ void observe_hit_secondary(HitObserver callback, void* user) { listeners[1] = {c
 void set_packet_policy(PacketPolicy policy, void* user) { packet_policy = policy; packet_policy_user = user; }
 void reset() {
     state = Snapshot{};
+    target_hit_frame = 0;
     player_handle = 0;
     scoped_attacker = scoped_target = 0;
     notified = {}; notified_count = 0;
