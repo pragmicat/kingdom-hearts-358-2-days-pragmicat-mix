@@ -19,7 +19,7 @@ Callbacks callbacks;
 Settings settings;
 View state;
 FrameContext last_context;
-bool initialized = false, replacing = false;
+bool initialized = false, replacing = false, unload_hooked = false;
 unsigned last_tick = 0, seen_serial = ~0u, serial_targets = 0;
 std::array<KhActor, 16> targets{};
 int normal_overlay = -1, drive_overlay = -1;
@@ -388,6 +388,9 @@ bool safe(const FrameContext& context) {
     return true;
 }
 void party_unload() {
+    // An incomplete installation may await restoration. Keep its pre-resolved
+    // native chain callable without touching Drive state or overlay ownership.
+    if (!initialized) { original_unload_party(); return; }
     // The party destructor will release its current dual overlay. Our reserved,
     // actor-free normal overlay must be released BEFORE ov029 itself unloads.
     if (normal_overlay >= 0 && engine->module_loaded(29)) release_overlay(normal_overlay);
@@ -407,7 +410,7 @@ template<class T> bool get_routine(T& value, const char* name) {
 
 bool init(const KhHost* given_host, const KhEngine* given_engine, const KhActors* given_actors,
           const KhNet* given_net, Callbacks given_callbacks, Settings given_settings) {
-    if (initialized || !given_host || !given_engine || !given_actors || !given_net ||
+    if (initialized || unload_hooked || !given_host || !given_engine || !given_actors || !given_net ||
         given_host->size < sizeof(KhHost) || given_host->abi_major != KH_ABI_MAJOR ||
         given_engine->size < sizeof(KhEngine) || given_actors->size < sizeof(KhActors) ||
         given_net->size < sizeof(KhNet) || !given_host->port_version ||
@@ -439,12 +442,19 @@ bool init(const KhHost* given_host, const KhEngine* given_engine, const KhActors
         !get_routine(set_visible,"func_ov022_020a0678") || !get_routine(set_hp,"Ov022_ActorSetHp") ||
         !get_routine(place,"func_ov022_02088218") || !get_routine(show_group,"func_ov022_02088428") ||
         !get_routine(allocate,"NNSi_FndAllocFromDefaultExpHeap") ||
-        !get_routine(free_block,"NNSi_FndFreeFromDefaultHeap")) {
+        !get_routine(free_block,"NNSi_FndFreeFromDefaultHeap") ||
+        !get_routine(original_unload_party,"Ov022_UnloadParty")) {
         reason("Audited native Drive lifecycle routines are unavailable."); return false;
     }
     void* previous = nullptr;
-    if (engine->replace("Ov022_UnloadParty", reinterpret_cast<void*>(&party_unload), &previous) != KH_OK || !previous) {
+    if (engine->replace("Ov022_UnloadParty", reinterpret_cast<void*>(&party_unload), &previous) != KH_OK) {
         reason("Native party-teardown guard could not be installed."); return false;
+    }
+    unload_hooked = true;
+    if (!previous) {
+        reason("Native party-teardown guard did not return its predecessor.");
+        stop(); // Retryable restoration; the resolved chain remains a pass-through.
+        return false;
     }
     original_unload_party = reinterpret_cast<Void0>(previous);
     initialized = true; state.available = true;
@@ -532,12 +542,17 @@ void reset() {
     if (!is_active()) { state.charge = 0; state.ready = false; state.phase = Phase::Normal; }
 }
 void stop() {
-    if (!initialized) return;
-    reset();
-    if (normal_overlay >= 0 && engine->module_loaded(29)) release_overlay(normal_overlay);
-    normal_overlay = drive_overlay = -1;
-    normal_appearance = {};
-    if (original_unload_party) engine->replace("Ov022_UnloadParty", reinterpret_cast<void*>(original_unload_party), nullptr);
-    initialized = false; state.available = false;
+    if (initialized) {
+        reset();
+        if (normal_overlay >= 0 && engine->module_loaded(29)) release_overlay(normal_overlay);
+        normal_overlay = drive_overlay = -1;
+        normal_appearance = {};
+        initialized = false; state.available = false;
+    }
+    if (unload_hooked && engine && original_unload_party &&
+        engine->replace("Ov022_UnloadParty", reinterpret_cast<void*>(original_unload_party), nullptr) == KH_OK) {
+        unload_hooked = false;
+        original_unload_party = nullptr;
+    }
 }
 }

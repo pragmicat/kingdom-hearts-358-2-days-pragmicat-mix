@@ -6,6 +6,14 @@ Source version is **0.3.3**, targeting Yokimitsuro's native Days PC port **0.1.5
 This source review branch omits artwork. Windows packaging needs its original
 artwork assets integrated, followed by a fresh build and validation.
 
+The Drive-hook recovery follow-up passes **17 Drive cases**. Initialization
+resolves the original party-unload routine before installing its hook. Missing
+or refused hooks leave native dispatch intact; an installation with a missing
+predecessor restores it or remains a callable pass-through until stop can retry.
+Hook ownership is tracked separately from successful initialization. Both new
+failure-injection regressions failed before the fix. These mock-host checks do
+not establish Windows/native lifecycle behavior; native validation remains open.
+
 The Drive-setting follow-up passes **66 controller cases**. Charge connections
 now matches every selectable count from 10 through 80 exactly: capacity scales
 with the chosen count instead of truncating 1000/count credit per connection.

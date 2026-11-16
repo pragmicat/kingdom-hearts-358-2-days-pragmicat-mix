@@ -31,6 +31,8 @@ KhNet net_api{};
 unsigned acquire_calls, destroy_calls, construct_calls, before_calls, after_calls;
 unsigned group_calls;
 bool veto, room, fail_dual, fail_normal, reset_failures_after_one, fail_scratch;
+bool null_previous, refuse_install, refuse_restore;
+unsigned passthrough_calls;
 unsigned scratch_calls;
 int last_after_kind;
 bool last_after_rollback;
@@ -214,8 +216,11 @@ void* routine(const char* name,int*) { auto f=functions.find(name);return f==fun
 int module_loaded(int module) { return loaded.count(module)?1:0; }
 KhResult replace(const char* name,void* fn,void** old) {
     if(std::string(name)!="Ov022_UnloadParty")return KH_ERROR;
-    if(old)*old=functions[name];functions[name]=fn;return KH_OK;
+    const bool installing=fn==reinterpret_cast<void*>(&rxdrive::party_unload);
+    if(installing?refuse_install:refuse_restore)return KH_ERROR;
+    if(old)*old=null_previous?nullptr:functions[name];functions[name]=fn;return KH_OK;
 }
+void passthrough_unload() {++passthrough_calls;}
 bool before(KhRef old,int,void*) { REQUIRE(old==current_actor());++before_calls;return !veto; }
 void after(KhRef old,KhRef fresh,int kind,bool rollback,void*) {
     REQUIRE(!pointer(old));REQUIRE(fresh==current_actor());
@@ -224,7 +229,7 @@ void after(KhRef old,KhRef fresh,int kind,bool rollback,void*) {
 rxdrive::FrameContext context(unsigned tick=100,bool safe=true) {
     return {current_actor(),tick,true,false,false,true,safe};
 }
-void setup() {
+void setup(bool initialize=true) {
     // Each case stops the previous adapter before resetting mock memory.
     rxdrive::stop();
     allocations.clear();globals.clear();functions.clear();descriptors.clear();descriptor_overlay.clear();
@@ -232,6 +237,7 @@ void setup() {
     constructor_args.clear();language_value=0x10;
     acquire_calls=destroy_calls=construct_calls=before_calls=after_calls=group_calls=0;
     veto=room=fail_dual=fail_normal=reset_failures_after_one=fail_scratch=false;scratch_calls=0;
+    null_previous=refuse_install=refuse_restore=false;passthrough_calls=0;
     loader_ref=alloc(48);root=alloc(0xe4);party_ref=alloc(4*0x104);metadata_ref=alloc(4*0x44);
     scene_ref=alloc(16);mode_ref=alloc(4);slots_ref=alloc(16);groups_ref=alloc(20*16);
     put<unsigned char>(root,0x34,1);
@@ -285,8 +291,36 @@ void setup() {
     actors_api={};actors_api.size=sizeof(actors_api);actors_api.player=&sdk_player;
     actors_api.ref=&sdk_ref;actors_api.local_seat=&local_seat;
     net_api={};net_api.size=sizeof(net_api);net_api.in_room=&in_room;
-    REQUIRE(rxdrive::init(&host_api,&engine_api,&actors_api,&net_api,{&before,&after,nullptr,nullptr}));
-    rxdrive::frame(context());
+    if(initialize) {
+        REQUIRE(rxdrive::init(&host_api,&engine_api,&actors_api,&net_api,{&before,&after,nullptr,nullptr}));
+        rxdrive::frame(context());
+    }
+}
+void test_hook_preflight_and_refusal_preserve_native_callback() {
+    for(bool missing:{false,true}) {
+        setup(false);
+        if(missing)functions.erase("Ov022_UnloadParty");else refuse_install=true;
+        REQUIRE(!rxdrive::init(&host_api,&engine_api,&actors_api,&net_api));
+        REQUIRE(!rxdrive::view().available && !destroy_calls && !acquire_calls);
+        if(missing)REQUIRE(!functions.count("Ov022_UnloadParty"));
+        else REQUIRE(functions.at("Ov022_UnloadParty")==reinterpret_cast<void*>(&original_unload));
+        refuse_install=false;rxdrive::stop();
+    }
+}
+void test_incomplete_hook_restores_or_remains_callable_until_retry() {
+    for(bool retry:{false,true}) {
+        setup(false);functions["Ov022_UnloadParty"]=reinterpret_cast<void*>(&passthrough_unload);
+        null_previous=true;refuse_restore=retry;
+        REQUIRE(!rxdrive::init(&host_api,&engine_api,&actors_api,&net_api));
+        REQUIRE(!rxdrive::view().available && !rxdrive::request_activation());
+        if(!retry)REQUIRE(functions.at("Ov022_UnloadParty")==reinterpret_cast<void*>(&passthrough_unload));
+        reinterpret_cast<void(*)()>(functions.at("Ov022_UnloadParty"))();
+        REQUIRE(passthrough_calls==1 && !destroy_calls && !acquire_calls);
+        null_previous=refuse_restore=false;rxdrive::stop();
+        REQUIRE(functions.at("Ov022_UnloadParty")==reinterpret_cast<void*>(&passthrough_unload));
+        REQUIRE(rxdrive::init(&host_api,&engine_api,&actors_api,&net_api));
+        rxdrive::stop();
+    }
 }
 void charge() {
     for(unsigned serial=0;serial<25;++serial)
@@ -561,6 +595,8 @@ int main() {
     using namespace testdrive;
     struct Case{const char*name;void(*test)();};
     const Case cases[]={{"charge-dedup-cap-and-coop",test_charge},{"native-model-class-roundtrip-preserves-state",test_native_roundtrip},
+        {"hook-preflight-and-refusal-preserve-native-callback",test_hook_preflight_and_refusal_preserve_native_callback},
+        {"incomplete-hook-rollback-and-callable-retry",test_incomplete_hook_restores_or_remains_callable_until_retry},
         {"pause-cinematic-timer-and-safe-expiry",test_pause_expiry},{"veto-overlay-capacity-fails-before-destroy",test_veto_and_overlay_full},
         {"resume-excludes-paused-and-cinematic-frame-gaps",test_resume_does_not_charge_a_suspended_frame_gap},
         {"activation-and-restoration-rollback",test_rollback},{"reserved-overlay-release-before-party-unload",test_party_unload},
