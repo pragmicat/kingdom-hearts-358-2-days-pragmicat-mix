@@ -1,0 +1,47 @@
+diff --git a/port/tools/abi_repair.py b/port/tools/abi_repair.py
+index 49ec16e..6360dd0 100644
+--- a/port/tools/abi_repair.py
++++ b/port/tools/abi_repair.py
+@@ -392,6 +392,7 @@ def written_params(body: str, names: list[str]) -> list[int]:
+ 
+ DEFINITION = re.compile(r"^[A-Za-z_][\w \t\*]*?\b([A-Za-z_]\w*)\s*\([^;{}]*\)\s*\{", re.MULTILINE)
+ UNCALLED_NAME = re.compile(r"\b([A-Za-z_]\w*)\b(?!\s*\()")
++CALL_OR_DECLARATION = re.compile(r"\b([A-Za-z_]\w*)\s*\(")
+ 
+ 
+ def unoptimize_callbacks(texts: dict[str, str]) -> tuple[dict[str, str], list[str]]:
+@@ -448,10 +449,19 @@ def pad_short_calls(texts: dict[str, str]) -> tuple[dict[str, str], list[str]]:
+     def_file: dict[str, str] = {}
+     defined_in: dict[str, set[str]] = collections.defaultdict(set)
+     for rel, text in texts.items():
+-        for m in re.finditer(r"^[A-Za-z_][\w \t\*]*?\b([A-Za-z_]\w*)\s*\([^;{}]*\)\s*\{", text, re.MULTILINE):
++        for m in DEFINITION.finditer(text):
+             defined_in[m[1]].add(rel)
+             if not re.match(r"\s*static\b", m[0]):
+                 def_file.setdefault(m[1], rel)
++    # An initial text scan finds files worth examining for each name. Keep
++    # source order and leave declaration/comment filtering to the existing
++    # checks below. Searching every file once per definition is expensive on
++    # the whole game, even when almost all of those searches find nothing.
++    files_by_name: dict[str, list[str]] = collections.defaultdict(list)
++    for rel, text in texts.items():
++        for name in set(CALL_OR_DECLARATION.findall(text)):
++            if name in defined_in:
++                files_by_name[name].append(rel)
+     masks: dict[str, bytearray] = {}
+ 
+     def mask(rel: str) -> bytearray:
+@@ -473,11 +483,9 @@ def pad_short_calls(texts: dict[str, str]) -> tuple[dict[str, str], list[str]]:
+     edits: dict[str, list[tuple[int, int, str]]] = collections.defaultdict(list)
+     report = []
+     for name in sorted(defined_in):
+-        pattern = re.compile(rf"\b{re.escape(name)}\s*\(")
+         linked = taken(name, def_file[name]) if name in def_file else None
+-        for rel, text in texts.items():
+-            if name not in text or not pattern.search(text):
+-                continue
++        for rel in files_by_name[name]:
++            text = texts[rel]
+             definition = taken(name, rel) if rel in defined_in[name] else linked
+             if not definition or not definition[0]:
+                 continue

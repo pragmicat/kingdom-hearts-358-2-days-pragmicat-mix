@@ -1,0 +1,14 @@
+{
+  "commit": "2037f79a171524eafcf40a1d641b16da14667a64",
+  "sha256": {
+    "port/host/app/bindings.c": "250749954c9bf27b4b51253ae4d45a2d62616b8cf276529363c394ca4fda14a6",
+    "port/host/app/bindings.h": "1c15fc9d47729aa83a041911ddee9e47819db74a033f4b322b3c74f0d661d80b",
+    "port/runtime/input/controls_hooks.c": "d7c5004ce9f2d052771bfd7a5371c783d50e58b3b3da844da0391ce01e78d81d",
+    "port/runtime/input/analog.c": "7e623fe551cadf3038a6c62c9600cdbff2060bf006e017135c4f571a57ab06a8",
+    "external/khdays-decomp/src/overlays/field/ov022_battle/Ov022_HeadingFromHeldDpad.c": "303429d2ab0b65358749b7bb251111943dcb0dfe9eba7cee7f1885b57613d2b4",
+    "port/runtime/input/controls_hooks.h": "91e2e1062e5d79d9bdb1d84f919a036bde078c9d1c281bef8a9513f7aced8ac3",
+    "port/runtime/input/analog.h": "af58ae0e77be7ed77ece60a034a6495403cf0e1c0da1c04c4d766a2390d5f0eb",
+    "port/runtime/input/input.h": "44a9027e9a8d9dbbe376a6690b4a183b33b99601322360366d04ed531897350f",
+    "port/runtime/net/net_session.h": "842ef1711d78d9ce07003b9fe6ca30acd28c121e9816f60419fb5f3aef21f0b0"
+  }
+}

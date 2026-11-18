@@ -224,7 +224,10 @@ local function spawn()
   end
   if made > 0 then
     run.hp_scale = hp_scale
-    if mode.value == 5 then run.endless_spawned = made end
+    if mode.value == 5 then
+      run.endless_spawned = made
+      run.refill_slot = 1
+    end
   end
   -- A partially filled group is played as it stands; retrying it would duplicate its live members.
   return made > 0
@@ -255,15 +258,17 @@ local function step_endless()
   local ready = {}
   for _, entry in ipairs(enemies.kinds("all")) do ready[entry.kind] = entry.ready end
   local made = false
-  for slot, target in ipairs(group) do
-    if not occupied[slot] then
-      if ready[target[1]] then
-        local handles = make_target(target, run.hp_scale)
-        if handles ~= nil and #handles > 0 then
-          for _, handle in ipairs(handles) do run.endless_targets[handle] = slot end
-          run.endless_spawned = run.endless_spawned + #handles
-          made = true
-        end
+  for offset = 0, #group - 1 do
+    local slot = (run.refill_slot + offset - 1) % #group + 1
+    local target = group[slot]
+    if not occupied[slot] and ready[target[1]] then
+      -- Rotate after a refusal so an available slot still gets a turn.
+      run.refill_slot = slot % #group + 1
+      local handles = make_target(target, run.hp_scale)
+      if handles ~= nil and #handles > 0 then
+        for _, handle in ipairs(handles) do run.endless_targets[handle] = slot end
+        run.endless_spawned = run.endless_spawned + #handles
+        made = true
       end
       break -- at most one replacement attempt per interval
     end

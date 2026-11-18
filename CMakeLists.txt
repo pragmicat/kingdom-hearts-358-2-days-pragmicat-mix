@@ -3,9 +3,8 @@ file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/VERSION" PRAGMICAT_VERSION LIMIT_COUNT
 project(PragmicatMix VERSION ${PRAGMICAT_VERSION} LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-add_library(pragmicat_mix MODULE src/combat.cpp src/limit_finishers.cpp
-  src/combat_motion.cpp src/combat_rules.cpp src/drive_form.cpp src/animation_links.cpp src/drive_hud.cpp
-  src/practice_boot.cpp src/weapon_animation.cpp)
+include(cmake/PragmicatSources.cmake)
+add_library(pragmicat_mix MODULE ${PRAGMICAT_COMBAT_SOURCES})
 target_include_directories(pragmicat_mix PRIVATE vendor/sdk/include generated)
 set_target_properties(pragmicat_mix PROPERTIES PREFIX "" MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 if(MSVC)

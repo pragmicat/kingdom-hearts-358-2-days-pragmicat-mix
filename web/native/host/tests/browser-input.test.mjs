@@ -1,0 +1,74 @@
+import assert from 'node:assert/strict';
+import { attachDaysInput, DAYS_KEYS } from '../browser-input.mjs';
+class Target {
+  listeners = new Map();
+  addEventListener(name, callback) { if (!this.listeners.has(name)) this.listeners.set(name, new Set()); this.listeners.get(name).add(callback); }
+  removeEventListener(name, callback) { this.listeners.get(name)?.delete(callback); }
+  fire(name, data = {}) { const event = { preventDefault() { this.prevented = true; }, ...data }; for (const callback of this.listeners.get(name) || []) callback(event); return event; }
+}
+const windowObject = new Target(), documentObject = new Target(), canvas = new Target();
+let callback, serial = 0, pads = [];
+windowObject.requestAnimationFrame = fn => { callback = fn; return ++serial; };
+windowObject.cancelAnimationFrame = () => { callback = null; };
+documentObject.hidden = false;
+canvas.style = { touchAction: 'pan-y' }; canvas.tabIndex = -1;
+canvas.getBoundingClientRect = () => ({left:10,top:20,width:512,height:768});
+canvas.focus = () => { documentObject.activeElement = canvas; };
+canvas.setPointerCapture = () => {};
+const calls = [];
+const module = Object.fromEntries(['input_reset','input_buttons','input_touch','input_sticks','host_hidden']
+  .map(name => [`_days_web_${name}`, (...args) => calls.push([name, ...args])]));
+const latest = name => calls.filter(call => call[0] === name).at(-1);
+const input = attachDaysInput(module, canvas, {windowObject, documentObject, navigatorObject:{getGamepads:()=>pads}});
+assert.equal(canvas.tabIndex, 0);
+windowObject.fire('keydown', {code:'KeyJ'});
+assert.equal(calls.some(call => call[0] === 'input_buttons'), false, 'unfocused page never captures gameplay keys');
+input.focus();
+assert(windowObject.fire('keydown', {code:'KeyJ'}).prevented);
+assert.deepEqual(latest('input_buttons'), ['input_buttons', 1]);
+windowObject.fire('keydown', {code:'KeyJ', repeat:true});
+windowObject.fire('keyup', {code:'KeyJ'});
+assert.deepEqual(latest('input_buttons'), ['input_buttons', 0]);
+windowObject.fire('keydown', {code:'KeyU', target:{tagName:'INPUT'}});
+assert.equal(latest('input_buttons')[1], 0, 'typing in host controls is not a technique');
+windowObject.fire('keydown', {code:'ShiftLeft'});
+windowObject.fire('keydown', {code:'ShiftRight'});
+windowObject.fire('keyup', {code:'ShiftLeft'});
+assert.equal(latest('input_buttons')[1], DAYS_KEYS.ShiftRight, 'releasing one binding keeps the other held');
+windowObject.fire('blur');
+assert.equal(latest('input_reset')[0], 'input_reset');
+windowObject.fire('focus');
+canvas.fire('pointerdown', {pointerId:1,button:0,clientX:266,clientY:212});
+assert.equal(calls.some(call => call[0] === 'input_touch'), false, 'upper screen never receives a stylus');
+canvas.fire('pointerdown', {pointerId:1,button:0,clientX:266,clientY:596});
+assert.deepEqual(latest('input_touch'), ['input_touch',128,96,1]);
+canvas.fire('pointermove', {pointerId:2,clientX:266,clientY:600});
+assert.deepEqual(latest('input_touch'), ['input_touch',128,96,1], 'unowned second pointer ignored');
+windowObject.fire('pointerup', {pointerId:1});
+assert.deepEqual(latest('input_touch'), ['input_touch',0,0,0]);
+pads = [{connected:true,mapping:'standard',buttons:Array.from({length:16},(_,i)=>({pressed:i===3})),axes:[0.5,-0.5,0,1]}];
+windowObject.fire('keydown', {code:'KeyJ'});
+callback();
+assert.equal(latest('input_buttons')[1], 1|1024, 'keyboard and gamepad sources combine');
+assert.deepEqual(latest('input_sticks'), ['input_sticks',16384,-16383,0,32767,1]);
+windowObject.fire('blur');
+callback();
+assert.deepEqual(latest('input_sticks'), ['input_sticks',0,0,0,0,0], 'next animation poll must not restore a pad after window blur');
+assert.equal(latest('input_buttons')[1],0,'blur clears combined keyboard/pad inputs even when canvas remains activeElement');
+windowObject.fire('focus');
+windowObject.fire('keydown', {code:'KeyJ'});
+callback();
+pads = []; callback();
+assert.equal(latest('input_buttons')[1], 1, 'disconnect releases pad without releasing keyboard');
+assert.deepEqual(latest('input_sticks'), ['input_sticks',0,0,0,0,0]);
+documentObject.hidden = true; documentObject.fire('visibilitychange');
+assert.deepEqual(latest('host_hidden'), ['host_hidden',1]);
+documentObject.hidden = false; documentObject.fire('visibilitychange');
+assert.deepEqual(latest('host_hidden'), ['host_hidden',0]);
+const before = calls.length;
+input.dispose(); input.dispose();
+assert.equal(callback, null); assert.equal(canvas.tabIndex, -1); assert.equal(canvas.style.touchAction,'pan-y');
+const after = calls.length;
+windowObject.fire('keydown', {code:'KeyJ'});
+assert.equal(calls.length, after); assert(after > before);
+console.log('Browser input: focus, taps, duplicate bindings, touch ownership, gamepad combination/disconnect, visibility and teardown passed');

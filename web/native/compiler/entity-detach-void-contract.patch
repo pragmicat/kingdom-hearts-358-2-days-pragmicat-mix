@@ -1,0 +1,141 @@
+diff --git a/port/tools/prepare.py b/port/tools/prepare.py
+--- a/port/tools/prepare.py
++++ b/port/tools/prepare.py
+@@ -3974,6 +3974,23 @@
+ # Hooks by the decomp file, for functions HOOKS cannot name: DS Protect's (ov028) are data in the
+ # symbols, their bodies encrypted in the ROM, and several share a file. Applied like HOOKS.
+ FILE_HOOKS = {
++    # The pinned sole caller, Ov002_ReleaseSlotOwner, declares this wrapper
++    # void and discards its result. No pinned code takes its address. Its
++    # implementation forwards DList_Unlink's nonexistent return; the real
++    # unlink definition and game/engine.h both establish a void operation.
++    # Preserve the list mutation and remove only that fabricated result.
++    "src/engine/Entity_DetachNode.c": [
++        (
++            "extern int DList_Unlink();\n\n"
++            "int Entity_DetachNode(int entity, int *node) {\n"
++            "    return DList_Unlink(entity + 0xc, node);\n"
++            "}",
++            "extern void DList_Unlink(int **head, int *node);\n\n"
++            "void Entity_DetachNode(int entity, int *node) {\n"
++            "    DList_Unlink((int **)(entity + 0xc), node);\n"
++            "}",
++        )
++    ],
+     # DS Protect's own read of the card (ROMUtil_Read, for its flashcart check): each page comes
+     # from the port as a cartridge answers it, the card's registers left alone.
+     "src/overlays/system/ov028_dsprotect/dsprot/dsprot_rom_util.c": [
+diff --git a/port/tools/entity_detach_abi_test.py b/port/tools/entity_detach_abi_test.py
+new file mode 100644
+--- /dev/null
++++ b/port/tools/entity_detach_abi_test.py
+@@ -0,0 +1,109 @@
++"""The pinned Entity_DetachNode tail return has no consumed value.
++
++Optional pinned source + actual Wasm side-effect test:
++KHDAYS_TEST_DECOMP=/path/khdays-decomp KHDAYS_TEST_EMCC=/path/emcc python port/tools/entity_detach_abi_test.py
++"""
++from pathlib import Path
++import os
++import subprocess
++import sys
++import tempfile
++import unittest
++
++sys.path.insert(0, str(Path(__file__).resolve().parent))
++import prepare
++from references import rewrite_text
++from references.emit import EmitFailure, Index
++from references.preprocess import Flags, preprocess
++
++SOURCE = """extern int DList_Unlink();
++
++int Entity_DetachNode(int entity, int *node) {
++    return DList_Unlink(entity + 0xc, node);
++}
++"""
++PATH = "src/engine/Entity_DetachNode.c"
++
++
++def patched(source):
++    for before, after in prepare.FILE_HOOKS[PATH]:
++        if source.count(before) != 1:
++            raise AssertionError("pinned Entity_DetachNode hook must match exactly once")
++        source = source.replace(before, after)
++    return source
++
++
++class EntityDetachABI(unittest.TestCase):
++    def test_unrepaired_forwarding_return_is_not_silenced(self):
++        with self.assertRaisesRegex(EmitFailure, "DList_Unlink: used return value"):
++            rewrite_text(SOURCE, PATH, Index(game_functions={"DList_Unlink", "Entity_DetachNode"},
++                         discarded_returns={"DList_Unlink": "void"}))
++
++    def test_exact_hook_removes_the_bogus_return_only(self):
++        result = patched(SOURCE)
++        self.assertIn("void Entity_DetachNode", result)
++        self.assertIn("DList_Unlink((int **)(entity + 0xc), node);", result)
++        self.assertNotIn("return ", result)
++        output = rewrite_text(result, PATH, Index(game_functions={"DList_Unlink", "Entity_DetachNode"},
++                              discarded_returns={"DList_Unlink": "void", "Entity_DetachNode": "void"}))
++        self.assertIn("void Entity_DetachNode", output)
++
++    @unittest.skipUnless(os.environ.get("KHDAYS_TEST_DECOMP"), "set KHDAYS_TEST_DECOMP to audit the pinned sources")
++    def test_pinned_definition_and_sole_caller_contracts(self):
++        root = Path(os.environ["KHDAYS_TEST_DECOMP"])
++        result = patched((root/PATH).read_text())
++        self.assertIn("void Entity_DetachNode", result)
++        self.assertIn("void DList_Unlink(int **head, int *node)",
++                      (root/"src/engine/DList_Unlink.c").read_text())
++        caller = (root/"src/overlays/scenes/ov002_field/Ov002_ReleaseSlotOwner.c").read_text()
++        self.assertIn("extern void Entity_DetachNode(Ov002Owner *pOwner, Ov002Slot *pSlot);", caller)
++        self.assertIn("    Entity_DetachNode(pOwner, pSlot);", caller)
++
++    @unittest.skipUnless(os.environ.get("KHDAYS_TEST_DECOMP") and os.environ.get("KHDAYS_TEST_EMCC"),
++                         "set pinned sources and Emscripten for real Wasm execution")
++    def test_real_rewritten_unlink_preserves_head_middle_and_last_side_effects(self):
++        root = Path(os.environ["KHDAYS_TEST_DECOMP"])
++        names = {"DList_Unlink", "Entity_DetachNode"}
++        # Unlink retains the whole-program argument-block ABI. The corrected
++        # wrapper's result and the indirect-free callback case are not conflated.
++        index = Index(game_functions=names, game_objects=set(), variadic={"DList_Unlink"},
++                      discarded_returns={"DList_Unlink": "void", "Entity_DetachNode": "void"})
++        sources = {"wrapper": patched((root/PATH).read_text()),
++                   "unlink": (root/"src/engine/DList_Unlink.c").read_text()}
++        main = """
++extern void Entity_DetachNode(int entity, int *node);
++int main(void) {
++    int owner[4]={0}, a[2]={0}, b[2]={0}, c[2]={0};
++    owner[3]=(int)a; a[0]=(int)b; b[0]=(int)c; b[1]=(int)a; c[1]=(int)b;
++    Entity_DetachNode((int)owner,b);
++    if(owner[3]!=(int)a || a[0]!=(int)c || c[1]!=(int)a || b[0] || b[1]) return 1;
++    Entity_DetachNode((int)owner,a);
++    if(owner[3]!=(int)c || c[1] || a[0] || a[1]) return 2;
++    Entity_DetachNode((int)owner,c);
++    if(owner[3] || c[0] || c[1]) return 3;
++    return 0;
++}
++"""
++        with tempfile.TemporaryDirectory(prefix="days-unlink-return-") as temp:
++            folder = Path(temp)
++            (folder/"khdays_references.h").write_text(
++                "typedef unsigned int khdays_ref;\n#define KHDAYS_W(r) ((void *)(r))\n"
++                "#define KHDAYS_REF(p) ((khdays_ref)(p))\n")
++            for name, source in sources.items():
++                raw = folder/(name+".raw.c")
++                raw.write_text(source)
++                cooked = preprocess(raw, Flags(), dict(os.environ), os.environ["KHDAYS_TEST_EMCC"], backend="clang")
++                (folder/(name+".c")).write_text(rewrite_text(cooked, "src/"+name+".c", index))
++            (folder/"main.c").write_text(main)
++            result = folder/"unlink.cjs"
++            subprocess.run([os.environ["KHDAYS_TEST_EMCC"], "-std=c17", "-O0", "-I", str(folder),
++                            *(str(folder/(name+".c")) for name in sources), str(folder/"main.c"),
++                            "-sENVIRONMENT=node", "-sSINGLE_FILE=1", "-sWASM_ASYNC_COMPILATION=0",
++                            "-sEXIT_RUNTIME=1", "-Werror", "-Wno-unknown-pragmas", "-Wl,--fatal-warnings",
++                            "-Wno-parentheses-equality",
++                            "-o", str(result)], check=True)
++            subprocess.run([os.environ.get("KHDAYS_TEST_NODE", "node"), str(result)], check=True)
++
++
++if __name__ == "__main__":
++    unittest.main()

@@ -1,0 +1,335 @@
+diff --git a/port/tools/references/build.py b/port/tools/references/build.py
+index 8730410..4cb61cf 100644
+--- a/port/tools/references/build.py
++++ b/port/tools/references/build.py
+@@ -369,6 +369,7 @@ def _index_key(index) -> str:
+         sorted(index.game_functions or ()),
+         sorted(index.dispatched.items()),
+         sorted(index.variadic),
++        sorted(index.discarded_returns.items()),
+     ):
+         h.update(repr(part).encode())
+     return h.hexdigest()
+@@ -403,14 +404,17 @@ def rewrite_all(
+             raise SystemExit("references: the game's side does not parse:\n" + "\n".join(failures[:50]))
+         game_functions = {n for _, fs, _, _, _ in found for n in fs} | program.game_functions
+         if abi_profile == "wasm32":
+-            from .wasm_abi import mismatched_returns, block_abi as wasm_block_abi
+-            mismatched = mismatched_returns(found, game_functions)
++            from .wasm_abi import discarded_return_classes, mismatched_returns, block_abi as wasm_block_abi
++            discarded_returns = discarded_return_classes(found, game_functions)
++            mismatched = mismatched_returns(found, game_functions - set(discarded_returns))
+         else:
++            discarded_returns = {}
+             mismatched = hidden_result_mismatches(found, game_functions)
+         if mismatched:
+             raise SystemExit(
+-                "references: declarations that return a struct otherwise than their definition "
+-                "(through a hidden pointer on one side only): " + ", ".join(mismatched)
++                ("references: incompatible WebAssembly return classes: " if abi_profile == "wasm32" else
++                 "references: declarations that return a struct otherwise than their definition "
++                 "(through a hidden pointer on one side only): ") + ", ".join(mismatched)
+             )
+         variadic = wasm_block_abi(found, game_functions) if abi_profile == "wasm32" else block_abi(found, game_functions)
+         report = "".join(f"{n}\n" for n in sorted(variadic))
+@@ -425,6 +429,7 @@ def rewrite_all(
+             game_functions=game_functions,
+             dispatched=dict(program.dispatched),
+             variadic=variadic,
++            discarded_returns=discarded_returns,
+         )
+         key = _index_key(index)
+         results = list(pool.map(_emit, [(s, o, index, key) for s, o in jobs], chunksize=16))
+diff --git a/port/tools/references/emit.py b/port/tools/references/emit.py
+index c475486..9ea29e1 100644
+--- a/port/tools/references/emit.py
++++ b/port/tools/references/emit.py
+@@ -82,6 +82,9 @@ class Index:
+     dispatched: dict[str, int] = field(default_factory=dict)
+     # the game's functions that take their arguments in a block (the docstring)
+     variadic: set[str] = field(default_factory=set)
++    # Wasm scalar/void result mismatches, permitted ONLY at discarded direct
++    # calls. Every affected declaration/call uses the definition's exact class.
++    discarded_returns: dict[str, str] = field(default_factory=dict)
+ 
+ 
+ class EmitFailure(TypeFailure):
+@@ -114,6 +117,8 @@ class Emitter(c_generator.CGenerator):
+         # its calls to such functions: (block name, the arguments' slots)
+         self.va_calls: dict[int, tuple[str, list[tuple[int, CType]]]] = {}
+         self.variadic_addresses: set[str] = set()  # variadic-defined functions whose address it takes
++        self.parents: dict[int, tuple[object, str]] = {}
++        self.definition_results: dict[str, CType] = {}
+ 
+     # --- what a node is ---
+ 
+@@ -403,6 +408,10 @@ class Emitter(c_generator.CGenerator):
+         return self.named_function_reference(name, self.symbol(node))
+ 
+     def named_function_reference(self, name: str, s: Symbol | None, native: str = "") -> str:
++        if name in self.index.discarded_returns and (s is None or not isinstance(s.type, Function) or
++                                                    self.return_mismatch(name, s.type)):
++            raise EmitFailure(s.node if s is not None else None,
++                              f"wasm32 ABI: {name}: mismatched return class taken by address")
+         if name in self.index.variadic:
+             self.variadic_addresses.add(name)
+         """`name`'s function reference: its DS address, or a number the build
+@@ -543,7 +552,56 @@ class Emitter(c_generator.CGenerator):
+             return self.reference(node)
+         return self.lv(node)
+ 
++    def return_mismatch(self, name: str, function: Function) -> bool:
++        defined = self.index.discarded_returns.get(name)
++        if defined is None:
++            return False
++        from .wasm_abi import return_signature
++        return return_signature(self.layout, function) != defined
++
++    def exact_return(self, name: str, function: Function) -> Function:
++        if not self.return_mismatch(name, function):
++            return function
++        result = self.definition_results.get(name)
++        if result is None:
++            result = {"void": Void(), "i32": INT, "i64": Arithmetic("long long"),
++                      "f32": Arithmetic("float", floating=True), "f64": DOUBLE}[self.index.discarded_returns[name]]
++        return Function(result, function.params, function.variadic)
++
++    def discarded(self, node) -> bool:
++        """A conservative syntactic proof that an expression's result is unused."""
++        parent, field = self.parents.get(id(node), (None, ""))
++        if isinstance(parent, c_ast.Compound) and field.startswith("block_items["):
++            return True
++        if isinstance(parent, (c_ast.Case, c_ast.Default)) and field.startswith("stmts["):
++            return True
++        if isinstance(parent, c_ast.For) and field in ("init", "next", "stmt"):
++            return True
++        if isinstance(parent, (c_ast.While, c_ast.DoWhile, c_ast.Label)) and field == "stmt":
++            return True
++        if isinstance(parent, c_ast.If) and field in ("iftrue", "iffalse"):
++            return True
++        if isinstance(parent, c_ast.Cast) and isinstance(self.type(parent), Void):
++            return True
++        if isinstance(parent, c_ast.ExprList):
++            above, _ = self.parents.get(id(parent), (None, ""))
++            if isinstance(above, c_ast.FuncCall) and above.args is parent:
++                return False  # earlier function arguments are still consumed
++            return node is not parent.exprs[-1] or self.discarded(parent)
++        return False
++
+     def rv_FuncCall(self, node: c_ast.FuncCall) -> str:
++        callee = node.name
++        mismatch = (isinstance(callee, c_ast.ID) and self.is_function_designator(callee) and
++                    not self.host_symbol(self.symbol(callee)) and
++                    self.return_mismatch(callee.name, self.symbol(callee).type))
++        if mismatch and not self.discarded(node):
++            defined = self.index.discarded_returns[callee.name]
++            raise EmitFailure(node, f"wasm32 ABI: {callee.name}: used return value differs from defined {defined}")
++        call = self.call(node)
++        return f"((void)({call}))" if mismatch else call
++
++    def call(self, node: c_ast.FuncCall) -> str:
+         callee = node.name
+         args = node.args.exprs if node.args is not None else []
+         if id(node) in self.va_calls:
+@@ -553,7 +611,7 @@ class Emitter(c_generator.CGenerator):
+             and self.is_function_designator(callee)
+             and callee.name in self.index.dispatched
+         ):
+-            f = self.symbol(callee).type
++            f = self.exact_return(callee.name, self.symbol(callee).type)
+             fn = f"(({self.pointer_to(f)})KHDAYS_FN(0x{self.index.dispatched[callee.name]:08x}u))"
+             return f"{fn}({', '.join(self.value(a) for a in args)})"
+         if isinstance(callee, c_ast.ID) and self.is_function_designator(callee):
+@@ -662,7 +720,7 @@ class Emitter(c_generator.CGenerator):
+             stores.append(f"(*({self.pointer_to(t)})((unsigned char *){name} + {offset})) = {cast}({v})")
+         if isinstance(callee, c_ast.ID) and self.is_function_designator(callee):
+             if callee.name in self.index.dispatched:
+-                f = self.symbol(callee).type
++                f = self.exact_return(callee.name, self.symbol(callee).type)
+                 block = Function(f.result, [Pointer(Void())], True)  # spelt (khdays_ref)
+                 fn = f"(({self.pointer_to(block)})KHDAYS_FN(0x{self.index.dispatched[callee.name]:08x}u))"
+             else:
+@@ -879,6 +937,14 @@ class Emitter(c_generator.CGenerator):
+         return node
+ 
+     def visit_Decl(self, n, no_type=False):
++        original_symbol = self.tp.declared.get(id(n))
++        if (isinstance(n.type, c_ast.FuncDecl) and original_symbol is not None and
++                isinstance(original_symbol.type, Function) and not self.host_symbol(original_symbol) and
++                self.return_mismatch(n.name, original_symbol.type)):
++            n = copy.copy(n)
++            n.type = copy.copy(n.type)
++            result = self.exact_return(n.name, original_symbol.type).result
++            n.type.type = c_ast.TypeDecl(n.name, [], None, c_ast.IdentifierType(self.decl(result).split()))
+         if n.type is not None:
+             chain = self.once(n.type, None)
+             if chain is not n.type:
+@@ -1062,6 +1128,9 @@ class Emitter(c_generator.CGenerator):
+         return marker + super()._generate_stmt(n, add_indent)
+ 
+     def visit_FileAST(self, n):
++        self.parents = {id(child): (parent, field) for parent in walk(n) for field, child in parent.children()}
++        self.definition_results = {ext.decl.name: self.tp.declared[id(ext.decl)].type.result
++                                   for ext in n.ext if isinstance(ext, c_ast.FuncDef)}
+         # the functions this file defines: the game's, whatever their
+         # declarations before the definition say
+         self.defined_here = {ext.decl.name for ext in n.ext if isinstance(ext, c_ast.FuncDef)}
+diff --git a/port/tools/references/wasm_abi.py b/port/tools/references/wasm_abi.py
+index 2dba03c..a3e939c 100644
+--- a/port/tools/references/wasm_abi.py
++++ b/port/tools/references/wasm_abi.py
+@@ -184,6 +184,31 @@ def mismatched_returns(found, game_functions: set[str]) -> list[str]:
+     return mismatched
+ 
+ 
++def discarded_return_classes(found, game_functions: set[str]) -> dict[str, str]:
++    """Exact defined result classes for scalar/void mismatch candidates.
++
++    This is only a plan: emit.py must prove each mismatched call discards its
++    result, and reject mismatched address-taking. Used wrong-class values and
++    aggregate returns cannot be repaired by changing a call's C signature.
++    """
++    entries: dict[str, list] = {}
++    for _, _, _, shapes, _ in found:
++        for name, records in shapes.items():
++            entries.setdefault(name, []).extend(records)
++    direct = {"void", "i32", "i64", "f32", "f64"}
++    plan = {}
++    for name, records in entries.items():
++        if name not in game_functions:
++            continue
++        if any(len(entry) < 4 for entry in records):
++            raise UnsupportedWasmABI(None, f"wasm32 ABI: missing return-class metadata for {name}")
++        defined = {entry[3] for entry in records if entry[0] == "def"}
++        classes = {entry[3] for entry in records}
++        if len(defined) == 1 and len(classes) > 1 and classes <= direct:
++            plan[name] = next(iter(defined))
++    return plan
++
++
+ def block_abi(found, game_functions: set[str]) -> set[str]:
+     """Wasm needs exact arity/classes; matching prefixes are insufficient."""
+     entries: dict[str, list] = {}
+diff --git a/port/tools/references_wasm_returns_test.py b/port/tools/references_wasm_returns_test.py
+new file mode 100644
+index 0000000..0ef151c
+--- /dev/null
++++ b/port/tools/references_wasm_returns_test.py
+@@ -0,0 +1,117 @@
++"""Bounded discarded-return repair in the real rewrite and optional Wasm link.
++
++python port/tools/references_wasm_returns_test.py
++KHDAYS_TEST_EMCC=/path/emcc python port/tools/references_wasm_returns_test.py
++"""
++from pathlib import Path
++import os
++import subprocess
++import sys
++import tempfile
++import unittest
++
++sys.path.insert(0, str(Path(__file__).resolve().parent))
++from references import rewrite_text
++from references.build import _index_key
++from references.emit import EmitFailure, Index
++from references.wasm_abi import discarded_return_classes, mismatched_returns
++
++
++class DiscardedReturns(unittest.TestCase):
++    def rewrite(self, source, result="void", **kwargs):
++        return rewrite_text(source, "src/caller.c", Index(
++            game_functions={"target", "caller"}, discarded_returns={"target": result}, **kwargs))
++
++    def test_definition_plan_does_not_relax_aggregate_or_missing_metadata(self):
++        shapes = {"target": [["def", [], False, "void"], ["decl", [], False, "i32"]],
++                  "aggregate": [["def", [], True, "sret:8:4"], ["decl", [], False, "i64"]]}
++        found = [("source.c", [], [], shapes, "")]
++        self.assertEqual(discarded_return_classes(found, set(shapes)), {"target": "void"})
++        self.assertEqual(mismatched_returns(found, {"aggregate"}), ["aggregate (defined sret:8:4)"])
++
++    def test_exact_definition_classes_for_discarded_calls(self):
++        for result, spelling in [("void", "void"), ("i32", "int"), ("i64", "long long"),
++                                 ("f32", "float"), ("f64", "double")]:
++            declared = "int" if result == "void" else "void"
++            with self.subTest(result=result):
++                output = self.rewrite(f"extern {declared} target(void); void caller(void){{target();}}", result)
++                self.assertIn(f"extern {spelling} target(void);", output)
++                self.assertIn("((void)(target()))", output)
++
++    def test_scalar_wrong_class_can_only_be_discarded(self):
++        output = self.rewrite("extern double target(void); void caller(void){target();}", "i32")
++        self.assertIn("extern int target(void);", output)
++        with self.assertRaisesRegex(EmitFailure, "used return value"):
++            self.rewrite("extern double target(void); double caller(void){return target();}", "i32")
++
++    def test_same_tu_definition_keeps_its_real_scalar_spelling(self):
++        output = self.rewrite("extern void target(void); void caller(void){target();}"
++                              "unsigned char target(void){return 7;}", "i32")
++        self.assertIn("extern unsigned char target(void);", output)
++        self.assertIn("unsigned char target(void)", output)
++
++    def test_statement_void_cast_comma_and_loop_discard_proofs(self):
++        for statement in ["target();", "(void)target();", "(target(), 0);",
++                          "if (1) target();", "for(target(); 0; target()) {}"]:
++            with self.subTest(statement=statement):
++                self.rewrite("extern int target(void); void caller(void){" + statement + "}")
++
++    def test_values_and_function_arguments_remain_errors(self):
++        for body in ["return target();", "int x=target(); return x;", "return target()+1;",
++                     "if(target()) return 1; return 0;", "return other(target(), 0);"]:
++            with self.subTest(body=body), self.assertRaisesRegex(EmitFailure, "used return value"):
++                self.rewrite("extern int target(void); extern int other(int,int); int caller(void){"+body+"}")
++
++    def test_mismatched_function_pointer_is_not_reinterpreted(self):
++        with self.assertRaisesRegex(EmitFailure, "taken by address"):
++            self.rewrite("extern int target(void); void caller(void){int (*p)(void)=target;}")
++        with self.assertRaisesRegex(EmitFailure, "taken by address"):
++            self.rewrite("extern int target; void caller(void){int *p=&target;}", game_objects=set())
++
++    def test_dispatched_call_and_argument_block_keep_exact_result(self):
++        output = self.rewrite("extern int target(int); void caller(void){target(7);}",
++                              dispatched={"target": 0x02001000})
++        self.assertIn("void(*)(int)", output)
++        output = self.rewrite("extern int target(int); void caller(void){target(7);}",
++                              dispatched={"target": 0x02001000}, variadic={"target"})
++        self.assertIn("void(*)(khdays_ref)", output)
++
++    def test_return_plan_invalidates_emit_cache(self):
++        self.assertNotEqual(_index_key(Index()), _index_key(Index(discarded_returns={"target": "void"})))
++
++    @unittest.skipUnless(os.environ.get("KHDAYS_TEST_EMCC"), "set KHDAYS_TEST_EMCC for pinned Emscripten")
++    def test_actual_cross_tu_wasm_calls(self):
++        emcc = os.environ["KHDAYS_TEST_EMCC"]
++        scalar = [("i32", "int", "7"), ("i64", "long long", "7ll"),
++                  ("f32", "float", "7.5f"), ("f64", "double", "7.5")]
++        names = {f"target_{kind}" for kind, _, _ in scalar} | {"target_void", "caller"}
++        plan = {f"target_{kind}": kind for kind, _, _ in scalar} | {"target_void": "void"}
++        callers = "\n".join(f"extern void target_{kind}(void);" for kind, _, _ in scalar)
++        callers += "\nextern long long target_void(void);\nvoid caller(void){"
++        callers += "".join(f"target_{kind}();" for kind, _, _ in scalar) + "target_void();}\n"
++        definitions = "void host_count(void);\n" + "\n".join(
++            f"{spelling} target_{kind}(void){{host_count();return {value};}}" for kind, spelling, value in scalar)
++        definitions += "\nvoid target_void(void){host_count();}\n"
++        index = Index(game_functions=names, discarded_returns=plan)
++        with tempfile.TemporaryDirectory(prefix="days-discard-return-") as temp:
++            folder = Path(temp)
++            (folder/"khdays_references.h").write_text("typedef unsigned int khdays_ref;\n")
++            for name, source in [("callers", callers), ("definitions", definitions)]:
++                (folder/(name+".c")).write_text(rewrite_text(source, "src/"+name+".c", index))
++            (folder/"callers-bad.c").write_text(rewrite_text(callers, "src/callers.c", Index(game_functions=names)))
++            (folder/"main.c").write_text("int count; void host_count(void){++count;} void caller(void);"
++                                         "int main(void){caller();return count==5?0:1;}")
++            result = folder/"test.cjs"
++            common = [emcc, "-std=c17", "-O0", "-I", str(folder), str(folder/"definitions.c"),
++                      str(folder/"main.c"), "-sENVIRONMENT=node", "-sSINGLE_FILE=1",
++                      "-sWASM_ASYNC_COMPILATION=0", "-sEXIT_RUNTIME=1", "-Werror",
++                      "-Wno-unknown-pragmas", "-Wl,--fatal-warnings", "-o", str(result)]
++            baseline = subprocess.run([*common, str(folder/"callers-bad.c")], text=True, capture_output=True)
++            self.assertNotEqual(baseline.returncode, 0)
++            self.assertIn("signature mismatch", baseline.stderr)
++            subprocess.run([*common, str(folder/"callers.c")], check=True)
++            subprocess.run([os.environ.get("KHDAYS_TEST_NODE", "node"), str(result)], check=True)
++
++
++if __name__ == "__main__":
++    unittest.main()

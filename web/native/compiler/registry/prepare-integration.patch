@@ -1,0 +1,47 @@
+diff --git a/port/tools/prepare.py b/port/tools/prepare.py
+--- a/port/tools/prepare.py
++++ b/port/tools/prepare.py
+@@ -5490,6 +5490,10 @@
+     out = Path(args.out).resolve()  # sources.cmake names its files absolutely
+     patched_dir = out / "patched"
+     patched_dir.mkdir(parents=True, exist_ok=True)
++    if args.preprocessor == "clang":
++        # A failed/incomplete browser generation must not leave an earlier
++        # successful source list available to a new browser link.
++        (out / "sources.cmake").unlink(missing_ok=True)
+ 
+     modules = load_modules()
+     compiled: list[tuple[Path, str]] = []  # (source, original relative path)
+@@ -6109,6 +6113,10 @@
+     rewritten, area = rewrite_game(out, c_sources, placed, functions, dispatched_calls,
+                                    backend=args.preprocessor, executable=args.compiler, processes=args.jobs,
+                                    abi_profile=args.abi_profile)
++    if args.preprocessor == "clang":
++        from static_registry import write_registry
++        registry = write_registry(rewritten, out / "khdays_static_registry.c")
++        rewritten.append(str(registry))
+     # the port's side calls the game's functions the host's way: none of
+     # those taking their arguments in a block (references/emit.py)
+     block = set((out / "references_block_abi.txt").read_text(encoding="utf-8").split())
+@@ -6134,13 +6142,20 @@
+     if not target.exists() or target.read_text(encoding="utf-8") != symbols_h:
+         target.write_text(symbols_h, encoding="utf-8")
+     cmake = cmake_list("KHDAYS_REWRITTEN", rewritten)
++    if args.preprocessor == "clang":
++        cmake = f'set(KHDAYS_ABI_PROFILE "{args.abi_profile}")\n' + cmake
+     rewritten_summary = (
+         f"; rewritten with references: {len(rewritten)} files ({pasted} pasted tokens "
+         f"separated), a data area of 0x{area:x} bytes"
+     )
+     target = out / "sources.cmake"
+     if not target.exists() or target.read_text(encoding="utf-8") != cmake:
+-        target.write_text(cmake, encoding="utf-8")
++        if args.preprocessor == "clang":
++            temporary = out / "sources.cmake.tmp"
++            temporary.write_text(cmake, encoding="utf-8")
++            temporary.replace(target)
++        else:
++            target.write_text(cmake, encoding="utf-8")
+ 
+     print(
+         f"{len(compiled)} sources ({patched} patched), "

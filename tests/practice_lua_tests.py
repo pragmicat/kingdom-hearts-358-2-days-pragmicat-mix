@@ -29,7 +29,7 @@ local function boot()
       set_position=function(x,y,z) assert(x==0 and y==.049 and z==0); c.recentred=true; return not c.no_place end,
       take_defeat=function(on) c.held_defeat=on; return true end },
     enemies = { hold_mission=function(on) c.holds=on; return true end,
-      kinds=function() local t={}; for _,id in ipairs({0,1,4,41}) do t[#t+1]={kind=id,ready=c.ready} end; return t end,
+      kinds=function() local t={}; for _,id in ipairs({0,1,4,41}) do t[#t+1]={kind=id,ready=c.ready and c.not_ready~=id} end; return t end,
       list=function() local t={}; for i,v in ipairs(c.live) do t[i]=v end; return t end,
       remove=function(ids) for _,id in ipairs(ids) do for i=#c.live,1,-1 do if c.live[i]==id then table.remove(c.live,i) end end end; return true end,
       make=function(spec)
@@ -434,6 +434,17 @@ test('endless replacement refusals stop finitely and a manual restart recovers',
   c.ready=true;c.reset();c.step(110)
   assert(#c.live==3 and c.hp==100 and c.last_notice:find('recovered',1,true))
   c.options.status.on_change();assert(c.last_notice:find('Endless wave 1.',1,true))
+end)
+test('a blocked endless spawn does not starve another available slot',function()
+  for _,block in ipairs({'not_ready','reject'}) do
+    local c=boot(); c.choose(5); c.step(110)
+    local survivor=c.live[2]
+    c.live={survivor}; c[block]=4
+    c.step(70)
+    assert(#c.live==2 and c.live[1]==survivor and c.made[#c.made].kind==0)
+    c[block]=nil; c.step(35)
+    assert(#c.live==3 and c.live[1]==survivor)
+  end
 end)
 print(('%d/%d practice Lua groups passed'):format(groups,groups))
 ''')

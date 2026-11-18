@@ -1,0 +1,271 @@
+diff --git a/port/runtime/net/roomlist.c b/port/runtime/net/roomlist.c
+index 421d76a..3c4ab1d 100644
+--- a/port/runtime/net/roomlist.c
++++ b/port/runtime/net/roomlist.c
+@@ -15,7 +15,17 @@
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
++#if defined(KHDAYS_BROWSER)
++#include "../core/browser_counter.h"
++/* Typing and the published room view are accessed on the same browser thread.
++ * These sections do not call anything that suspends the game. */
++#define ROOMLIST_ACQUIRE(lock, mode) ((void)0)
++#define ROOMLIST_RELEASE(lock, mode) ((void)0)
++#else
+ #include <windows.h>
++#define ROOMLIST_ACQUIRE(lock, mode) AcquireSRWLock##mode(lock)
++#define ROOMLIST_RELEASE(lock, mode) ReleaseSRWLock##mode(lock)
++#endif
+ 
+ extern int GetLanguage(void);
+ extern void Ov006_UpdateMissionMenuOptionScreen(void);
+@@ -124,13 +134,17 @@ static KhdaysRoomRow *rows;
+ static int row_count, row_room;
+ static Text names;
+ /* what the window's thread typed, for the game's thread to take */
++#if !defined(KHDAYS_BROWSER)
+ static SRWLOCK edit_lock = SRWLOCK_INIT;
++#endif
+ static Text typed;
+ static int *keys;
+ static int key_count, key_room;
+ static volatile LONG editing_now;
+ /* the view published */
++#if !defined(KHDAYS_BROWSER)
+ static SRWLOCK view_lock = SRWLOCK_INIT;
++#endif
+ static KhdaysRoomView *shown;
+ 
+ static u32 rd32(u32 address)
+@@ -567,6 +581,7 @@ static Text *field_text(int which)
+ 
+ /* For a test run without a keyboard: KHDAYS_TEST_TYPE's texts, '|' between them, each typed into the
+  * next field that takes text, which then ends as with Enter. */
++#if !defined(KHDAYS_BROWSER)
+ static void test_typing(Text *t)
+ {
+     static char *texts;
+@@ -590,6 +605,7 @@ static void test_typing(Text *t)
+     at = end != NULL ? (size_t)(end - texts) + 1 : length;
+     editing = 0;
+ }
++#endif
+ 
+ /* The window thread's typing, applied to the field being edited. */
+ static void take_typing(void)
+@@ -597,10 +613,12 @@ static void take_typing(void)
+     Text *t = editing && selectable(cursor) && rows[cursor].kind == KHDAYS_ROOMROW_FIELD
+                   ? field_text(rows[cursor].which)
+                   : NULL;
++#if !defined(KHDAYS_BROWSER)
+     if (t != NULL) {
+         test_typing(t);
+     }
+-    AcquireSRWLockExclusive(&edit_lock);
++#endif
++    ROOMLIST_ACQUIRE(&edit_lock, Exclusive);
+     if (t != NULL && typed.n > 0) {
+         text_append(t, typed.s, typed.n);
+     }
+@@ -621,7 +639,7 @@ static void take_typing(void)
+         }
+     }
+     key_count = 0;
+-    ReleaseSRWLockExclusive(&edit_lock);
++    ROOMLIST_RELEASE(&edit_lock, Exclusive);
+ }
+ 
+ int khdays_roomlist_editing(void)
+@@ -631,14 +649,14 @@ int khdays_roomlist_editing(void)
+ 
+ void khdays_roomlist_type(const char *utf8)
+ {
+-    AcquireSRWLockExclusive(&edit_lock);
++    ROOMLIST_ACQUIRE(&edit_lock, Exclusive);
+     text_append(&typed, utf8, strlen(utf8));
+-    ReleaseSRWLockExclusive(&edit_lock);
++    ROOMLIST_RELEASE(&edit_lock, Exclusive);
+ }
+ 
+ void khdays_roomlist_edit(int key)
+ {
+-    AcquireSRWLockExclusive(&edit_lock);
++    ROOMLIST_ACQUIRE(&edit_lock, Exclusive);
+     if (key_count == key_room) {
+         const int want = key_room != 0 ? key_room * 2 : 8;
+         int *more = (int *)realloc(keys, (size_t)want * sizeof(*keys));
+@@ -650,7 +668,7 @@ void khdays_roomlist_edit(int key)
+     if (key_count < key_room) {
+         keys[key_count++] = key;
+     }
+-    ReleaseSRWLockExclusive(&edit_lock);
++    ROOMLIST_RELEASE(&edit_lock, Exclusive);
+ }
+ 
+ /* ---- The view --------------------------------------------------------------------------------- */
+@@ -701,22 +719,22 @@ static void publish(int screen, int master)
+     memcpy(pool + at, mods_needed, strlen(mods_needed) + 1);
+     v->mods_needed = pool + at;
+     v->mods_more = mods_more;
+-    AcquireSRWLockExclusive(&view_lock);
++    ROOMLIST_ACQUIRE(&view_lock, Exclusive);
+     old = shown;
+     shown = v;
+-    ReleaseSRWLockExclusive(&view_lock);
++    ROOMLIST_RELEASE(&view_lock, Exclusive);
+     free(old);
+ }
+ 
+ const KhdaysRoomView *khdays_roomlist_hold(void)
+ {
+-    AcquireSRWLockShared(&view_lock);
++    ROOMLIST_ACQUIRE(&view_lock, Shared);
+     return shown;
+ }
+ 
+ void khdays_roomlist_release(void)
+ {
+-    ReleaseSRWLockShared(&view_lock);
++    ROOMLIST_RELEASE(&view_lock, Shared);
+ }
+ 
+ /* ---- The buttons ------------------------------------------------------------------------------ */
+diff --git a/port/host/net/net_browser.c b/port/host/net/net_browser.c
+new file mode 100644
+index 0000000..c3ec42d
+--- /dev/null
++++ b/port/host/net/net_browser.c
+@@ -0,0 +1,132 @@
++/* An offline browser host. The native wireless protocol requires raw IPv4
++ * sockets. Reject startup before it can create a session or its worker. */
++#include "net.h"
++
++#include <emscripten.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <sys/random.h>
++
++int khdays_host_net_start(void)
++{
++    static int reported;
++    if (!reported) {
++        fputs("khdays-browser: wireless multiplayer is unavailable\n", stderr);
++        reported = 1;
++    }
++    return 0;
++}
++
++KhdaysUdp *khdays_host_udp_open(unsigned short port, int shared)
++{
++    (void)port;
++    (void)shared;
++    return NULL;
++}
++
++unsigned short khdays_host_udp_port(const KhdaysUdp *udp)
++{
++    (void)udp;
++    return 0;
++}
++
++int khdays_host_udp_join(KhdaysUdp *udp, unsigned int group)
++{
++    (void)udp;
++    (void)group;
++    return 0;
++}
++
++int khdays_host_udp_send(KhdaysUdp *udp, const KhdaysNetAddress *to, const void *data, size_t size)
++{
++    (void)udp;
++    (void)to;
++    (void)data;
++    (void)size;
++    return 0;
++}
++
++long khdays_host_udp_receive(KhdaysUdp *udp, KhdaysNetAddress *from, void *data, size_t room)
++{
++    (void)udp;
++    (void)from;
++    (void)data;
++    (void)room;
++    return -1;
++}
++
++void khdays_host_udp_wait(KhdaysUdp *const *udps, int count, int ms)
++{
++    /* No socket can be opened and no receiver is started. */
++    (void)udps;
++    (void)count;
++    (void)ms;
++}
++
++void khdays_host_udp_close(KhdaysUdp *udp)
++{
++    (void)udp;
++}
++
++int khdays_host_net_addresses(unsigned int *ips, int room)
++{
++    (void)ips;
++    (void)room;
++    return 0;
++}
++
++int khdays_host_net_resolve(const char *text, unsigned short port, KhdaysNetAddress *out)
++{
++    (void)text;
++    (void)port;
++    (void)out;
++    return 0;
++}
++
++unsigned int khdays_host_build_identity(void)
++{
++    return 0; /* unavailable without transport */
++}
++
++void khdays_host_random(void *data, size_t size)
++{
++    unsigned char *next = data;
++    while (size != 0) {
++        const size_t chunk = size > 256 ? 256 : size;
++        if (getentropy(next, chunk) != 0) {
++            fputs("khdays-browser: system randomness is unavailable\n", stderr);
++            abort();
++        }
++        next += chunk;
++        size -= chunk;
++    }
++}
++
++unsigned long long khdays_host_net_clock_ms(void)
++{
++    return (unsigned long long)emscripten_get_now();
++}
++
++long khdays_host_tcp_exchange(const KhdaysNetAddress *to, const void *request, size_t size,
++                              void *reply, size_t room, int ms, unsigned int *local)
++{
++    (void)to;
++    (void)request;
++    (void)size;
++    (void)reply;
++    (void)room;
++    (void)ms;
++    (void)local;
++    return -1;
++}
++
++int khdays_host_net_gateway(unsigned int *ip)
++{
++    (void)ip;
++    return 0;
++}
++
++unsigned long long khdays_host_physical_memory(void)
++{
++    return 0;
++}

@@ -1,0 +1,476 @@
+diff --git a/port/runtime/menus/camp.c b/port/runtime/menus/camp.c
+index 95a3f53..386d566 100644
+--- a/port/runtime/menus/camp.c
++++ b/port/runtime/menus/camp.c
+@@ -18,8 +18,12 @@
+ #include <limits.h>
+ #include <stdlib.h>
+ #include <string.h>
++#if defined(KHDAYS_BROWSER)
++#include "../core/browser_counter.h"
++#else
+ #include <windows.h>
+ #undef PlaySound /* the game's sequence function, not Windows' wave playback macro */
++#endif
+ 
+ extern int PlaySound(int kind, int sound);
+ 
+@@ -133,7 +137,9 @@ static const int STORY_SUB_DESCRIPTIONS[2][2] = {{18, 19}, {13, 14}};
+ #define OFFSET_Q12 0x1dcu
+ #define OFFSETS 0x1e0u
+ 
++#if !defined(KHDAYS_BROWSER)
+ static SRWLOCK lock = SRWLOCK_INIT;
++#endif
+ static KhdaysCampView shown;
+ static u32 seen_at;
+ static int seen;
+@@ -1071,7 +1077,9 @@ static const u16 *files_table(int mode, u32 *count)
+             u32 size = 0;
+             snprintf(path, sizeof(path), "UI/cm/str/%s_%s.z", mode == 0 ? "rpt" : "enm", codes[i]);
+             if (khdays_rom_file_data(reader, path, -1, &data, &size) && data != NULL && size >= 4u) {
++#if defined(_MSC_VER)
+ #pragma warning(suppress : 6001) /* khdays_rom_file_data filled `size` bytes of it */
++#endif
+                 const u32 n = (u32)data[0] | (u32)data[1] << 8 | (u32)data[2] << 16 | (u32)data[3] << 24;
+                 /* as many records as the file holds after its count */
+                 if (n > 0 && (uint64_t)n * TABLE_RECORD <= (uint64_t)size - 4u &&
+@@ -1343,10 +1351,14 @@ void khdays_camp_update_ran(uintptr_t update)
+     if (c == NULL) {
+         if (seen && khdays_events_vblank_count() - seen_at > SEEN_FRAMES) {
+             seen = 0;
++#if !defined(KHDAYS_BROWSER)
+             AcquireSRWLockExclusive(&lock);
++#endif
+             memset(&shown, 0, sizeof(shown));
+             lists_clear(&published);
++#if !defined(KHDAYS_BROWSER)
+             ReleaseSRWLockExclusive(&lock);
++#endif
+         }
+         return;
+     }
+@@ -1397,10 +1409,14 @@ void khdays_camp_update_ran(uintptr_t update)
+     }
+     seen = 1;
+     seen_at = khdays_events_vblank_count();
++#if !defined(KHDAYS_BROWSER)
+     AcquireSRWLockExclusive(&lock);
++#endif
+     shown = v;
+     lists_copy(&published, &building);
++#if !defined(KHDAYS_BROWSER)
+     ReleaseSRWLockExclusive(&lock);
++#endif
+ }
+ 
+ int khdays_camp_game_brightness(void)
+@@ -1410,9 +1426,13 @@ int khdays_camp_game_brightness(void)
+ 
+ void khdays_camp_view(KhdaysCampView *out)
+ {
++#if !defined(KHDAYS_BROWSER)
+     AcquireSRWLockShared(&lock);
++#endif
+     *out = shown;
++#if !defined(KHDAYS_BROWSER)
+     ReleaseSRWLockShared(&lock);
++#endif
+     out->file.row = NULL;
+     out->file.rows = 0;
+     out->panel_text = NULL;
+@@ -1427,7 +1447,9 @@ void khdays_camp_lists_point(KhdaysCampView *v, const KhdaysCampLists *lists)
+ 
+ void khdays_camp_view_lists(KhdaysCampView *out, KhdaysCampLists *lists)
+ {
++#if !defined(KHDAYS_BROWSER)
+     AcquireSRWLockShared(&lock);
++#endif
+     *out = shown;
+     if (shown.shown) {
+         size_t row_room = (size_t)lists->row_room;
+@@ -1456,7 +1478,9 @@ void khdays_camp_view_lists(KhdaysCampView *out, KhdaysCampLists *lists)
+             lists->text_count = published.text_count;
+         }
+     }
++#if !defined(KHDAYS_BROWSER)
+     ReleaseSRWLockShared(&lock);
++#endif
+     khdays_camp_lists_point(out, lists);
+ }
+ 
+diff --git a/port/runtime/menus/charselect.c b/port/runtime/menus/charselect.c
+index 62ab13b..0d18772 100644
+--- a/port/runtime/menus/charselect.c
++++ b/port/runtime/menus/charselect.c
+@@ -18,7 +18,11 @@
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
++#if defined(KHDAYS_BROWSER)
++#include "../core/browser_counter.h"
++#else
+ #include <windows.h>
++#endif
+ 
+ extern int GetLanguage(void);
+ int khdays_language_wanted(void); /* language.c */
+@@ -102,7 +106,9 @@ static const Screen screens[] = {
+ };
+ #define SCREENS ((int)(sizeof(screens) / sizeof(screens[0])))
+ 
++#if !defined(KHDAYS_BROWSER)
+ static SRWLOCK lock = SRWLOCK_INIT;
++#endif
+ static KhdaysSelectView shown;
+ static int on = -1; /* screens' index whose update ran last */
+ static u32 seen_at;
+@@ -287,7 +293,11 @@ static int roll(const KhdaysSelectView *v, int now_on)
+         return now_on >= 0 && choosable(v, now_on) ? now_on : -1;
+     }
+     if (state == 0) {
++#if defined(KHDAYS_BROWSER)
++        state = (khdays_events_vblank_count() ^ (u32)(uint64_t)emscripten_get_now()) * 2654435761u | 1u;
++#else
+         state = (khdays_events_vblank_count() ^ (u32)GetTickCount64()) * 2654435761u | 1u;
++#endif
+     }
+     state ^= state << 13; /* xorshift32 */
+     state ^= state >> 17;
+@@ -676,9 +686,13 @@ void khdays_charselect_update_ran(uintptr_t update)
+              * places as they were, so that the DS's screen never shows on the way out */
+             seen_at = khdays_events_vblank_count();
+             now.master = brightness();
++#if !defined(KHDAYS_BROWSER)
+             AcquireSRWLockExclusive(&lock);
++#endif
+             shown = now;
++#if !defined(KHDAYS_BROWSER)
+             ReleaseSRWLockExclusive(&lock);
++#endif
+             return;
+         }
+         if (update == (uintptr_t)screens[i].update && khdays_overlay_loaded(screens[i].overlay)) {
+@@ -710,9 +724,13 @@ void khdays_charselect_update_ran(uintptr_t update)
+                 }
+             }
+             now = v;
++#if !defined(KHDAYS_BROWSER)
+             AcquireSRWLockExclusive(&lock);
++#endif
+             shown = v;
++#if !defined(KHDAYS_BROWSER)
+             ReleaseSRWLockExclusive(&lock);
++#endif
+             return;
+         }
+     }
+@@ -834,9 +852,13 @@ uint16_t khdays_charselect_buttons(uint16_t buttons)
+             on = -1; /* the screen left: nothing of it kept */
+             want = -1;
+             on_random = asked = a_kept = a_give = 0;
++#if !defined(KHDAYS_BROWSER)
+             AcquireSRWLockExclusive(&lock);
++#endif
+             memset(&shown, 0, sizeof(shown));
++#if !defined(KHDAYS_BROWSER)
+             ReleaseSRWLockExclusive(&lock);
++#endif
+         }
+         held = buttons;
+         return buttons;
+@@ -899,9 +921,13 @@ void *khdays_charselect_help(int message, void *game, void *out, int units)
+ 
+ void khdays_charselect_view(KhdaysSelectView *out)
+ {
++#if !defined(KHDAYS_BROWSER)
+     AcquireSRWLockShared(&lock);
++#endif
+     *out = shown;
++#if !defined(KHDAYS_BROWSER)
+     ReleaseSRWLockShared(&lock);
++#endif
+ }
+ 
+ void khdays_charselect_columns(int cols)
+diff --git a/port/runtime/menus/cinelist.c b/port/runtime/menus/cinelist.c
+index a24cf7d..654c335 100644
+--- a/port/runtime/menus/cinelist.c
++++ b/port/runtime/menus/cinelist.c
+@@ -11,8 +11,12 @@
+ #include "khdays_ds_symbols.h"
+ 
+ #include <string.h>
++#if defined(KHDAYS_BROWSER)
++#include "../core/browser_counter.h"
++#else
+ #include <windows.h>
+ #undef PlaySound /* windows.h's (winmm's), not the game's */
++#endif
+ 
+ extern int GetLanguage(void);
+ extern int PlaySound(int bank, int sound);
+@@ -34,7 +38,9 @@ u32 khdays_events_vblank_count(void);
+ #define ROW_MOVIE 0x8u
+ #define SEEN_FRAMES 2u /* the list is gone when none of its updates ran for longer */
+ 
++#if !defined(KHDAYS_BROWSER)
+ static SRWLOCK lock = SRWLOCK_INIT;
++#endif
+ static KhdaysCineView shown;
+ static u32 context, seen_at;
+ 
+@@ -93,16 +99,24 @@ void khdays_cinelist_frame(void)
+     if (!v.shown) {
+         memset(&v, 0, sizeof(v));
+     }
++#if !defined(KHDAYS_BROWSER)
+     AcquireSRWLockExclusive(&lock);
++#endif
+     shown = v;
++#if !defined(KHDAYS_BROWSER)
+     ReleaseSRWLockExclusive(&lock);
++#endif
+ }
+ 
+ void khdays_cinelist_view(KhdaysCineView *out)
+ {
++#if !defined(KHDAYS_BROWSER)
+     AcquireSRWLockShared(&lock);
++#endif
+     *out = shown;
++#if !defined(KHDAYS_BROWSER)
+     ReleaseSRWLockShared(&lock);
++#endif
+ }
+ 
+ /* The port's list of chapters: it takes the buttons; the sound it asks for (+1, 0 none); the buttons
+diff --git a/port/runtime/menus/daycard.c b/port/runtime/menus/daycard.c
+index a4d7120..bf74db0 100644
+--- a/port/runtime/menus/daycard.c
++++ b/port/runtime/menus/daycard.c
+@@ -8,7 +8,11 @@
+ #include "khdays_ds_symbols.h"
+ 
+ #include <string.h>
++#if defined(KHDAYS_BROWSER)
++#include <emscripten.h>
++#else
+ #include <windows.h>
++#endif
+ 
+ extern int GetLanguage(void);
+ extern int Ov004_StepSceneFrame(void);
+@@ -32,10 +36,16 @@ u32 khdays_events_vblank_count(void);
+ #define FADE_IN 16     /* the game's fade in before it (Ov004_FadeInTransition: a level an update) */
+ #define HD_RECENT 500u /* ms: the port's card is up when drawn this lately */
+ 
++#if !defined(KHDAYS_BROWSER)
+ static SRWLOCK lock = SRWLOCK_INIT;
++#endif
+ static KhdaysDayCardView shown;
+ static u32 context, seen_at;
++#if defined(KHDAYS_BROWSER)
++static double hd_drawn_at = -1.0;
++#else
+ static volatile LONG64 hd_drawn_at;
++#endif
+ static int paced;     /* this card's rolling was looked at (again from its fade in) */
+ static u32 fading_at; /* the VBlank its fade in was first seen at (0 not yet) */
+ 
+@@ -69,9 +79,22 @@ int khdays_daycard_arrival(int from, int to)
+ 
+ void khdays_daycard_hd_drawn(void)
+ {
++#if defined(KHDAYS_BROWSER)
++    hd_drawn_at = emscripten_get_now();
++#else
+     InterlockedExchange64(&hd_drawn_at, (LONG64)GetTickCount64());
++#endif
+ }
+ 
++#if defined(KHDAYS_BROWSER)
++static int browser_card_active(void)
++{
++    /* performance.now starts at page load, so zero is not a valid
++     * stand-in for a desktop uptime counter before the first drawing. */
++    return hd_drawn_at >= 0.0 && emscripten_get_now() - hd_drawn_at <= HD_RECENT;
++}
++#endif
++
+ /* The rolling just begun (Ov004_FadeInTransition set its step this update; Ov004_UpdateRollingTransition
+  * not yet run) while the port's card is up: its step made to end it as the theater's day arrives (its
+  * own: 30 updates a day up to 2, 9 up to 10, 4 up to 30, then 1 -- 248 for the prologue's 255 to day 7,
+@@ -93,7 +116,11 @@ static void pace(void)
+     }
+     if (paced || phase != ROLLING || rd32(context + PROGRESS) != 0 || rd32(context + ROLLED) != 0 || step == 0 ||
+         from < 0 || from >= 1000 || to < 0 || to >= 1000 ||
++#if defined(KHDAYS_BROWSER)
++        !browser_card_active()) {
++#else
+         GetTickCount64() - (ULONGLONG)InterlockedCompareExchange64(&hd_drawn_at, 0, 0) > HD_RECENT) {
++#endif
+         return;
+     }
+     paced = 1;
+@@ -148,14 +175,22 @@ void khdays_daycard_frame(void)
+             v.language = khdays_language_wanted() != 0 ? khdays_language_wanted() : GetLanguage();
+         }
+     }
++#if !defined(KHDAYS_BROWSER)
+     AcquireSRWLockExclusive(&lock);
++#endif
+     shown = v;
++#if !defined(KHDAYS_BROWSER)
+     ReleaseSRWLockExclusive(&lock);
++#endif
+ }
+ 
+ void khdays_daycard_view(KhdaysDayCardView *out)
+ {
++#if !defined(KHDAYS_BROWSER)
+     AcquireSRWLockShared(&lock);
++#endif
+     *out = shown;
++#if !defined(KHDAYS_BROWSER)
+     ReleaseSRWLockShared(&lock);
++#endif
+ }
+diff --git a/port/runtime/menus/enemy_viewer.c b/port/runtime/menus/enemy_viewer.c
+index eccd568..c680f39 100644
+--- a/port/runtime/menus/enemy_viewer.c
++++ b/port/runtime/menus/enemy_viewer.c
+@@ -15,8 +15,10 @@
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
++#if !defined(KHDAYS_BROWSER)
+ #include <windows.h>
+ #undef PlaySound /* the game's sequence function, not Windows' wave playback macro */
++#endif
+ 
+ typedef struct KhdaysRomReader KhdaysRomReader; /* rom.h */
+ KhdaysRomReader *khdays_rom_reader_new(void);
+@@ -113,7 +115,9 @@ static float min_f(float a, float b)
+     return a < b ? a : b;
+ }
+ 
++#if !defined(KHDAYS_BROWSER)
+ static SRWLOCK lock = SRWLOCK_INIT;
++#endif
+ static KhdaysEnemyViewer shown;
+ 
+ static struct {
+@@ -162,7 +166,9 @@ static u16 rd16(u32 a)
+ 
+ static void publish(void)
+ {
++#if !defined(KHDAYS_BROWSER)
+     AcquireSRWLockExclusive(&lock);
++#endif
+     shown.open = vw.open;
+     shown.ready = vw.ready;
+     shown.enemy = vw.enemy;
+@@ -171,14 +177,20 @@ static void publish(void)
+     shown.serial = vw.serial;
+     shown.row = vw.row;
+     shown.opening = vw.opening;
++#if !defined(KHDAYS_BROWSER)
+     ReleaseSRWLockExclusive(&lock);
++#endif
+ }
+ 
+ void khdays_enemy_viewer_read(KhdaysEnemyViewer *out)
+ {
++#if !defined(KHDAYS_BROWSER)
+     AcquireSRWLockExclusive(&lock);
++#endif
+     *out = shown;
++#if !defined(KHDAYS_BROWSER)
+     ReleaseSRWLockExclusive(&lock);
++#endif
+ }
+ 
+ static u32 alloc_zeroed(u32 size)
+diff --git a/port/runtime/menus/newgame.c b/port/runtime/menus/newgame.c
+index 24c2dfb..51b5dc8 100644
+--- a/port/runtime/menus/newgame.c
++++ b/port/runtime/menus/newgame.c
+@@ -12,8 +12,12 @@
+ #include "khdays_ds_symbols.h"
+ 
+ #include <stdio.h>
++#if defined(KHDAYS_BROWSER)
++#include "../core/browser_counter.h"
++#else
+ #include <windows.h>
+ #undef PlaySound /* windows.h's (winmm's), not the game's */
++#endif
+ 
+ extern int GetLanguage(void);
+ extern int PlaySound(int bank, int sound);
+diff --git a/port/runtime/menus/shop.c b/port/runtime/menus/shop.c
+index 65ca4cf..39f3e2a 100644
+--- a/port/runtime/menus/shop.c
++++ b/port/runtime/menus/shop.c
+@@ -10,7 +10,11 @@
+ #include <math.h>
+ #include <stdlib.h>
+ #include <string.h>
++#if defined(KHDAYS_BROWSER)
++#include "../core/browser_counter.h"
++#else
+ #include <windows.h>
++#endif
+ 
+ extern int GetLanguage(void);
+ int khdays_language_wanted(void); /* language.c */
+@@ -81,7 +85,9 @@ static const struct {
+ #undef ENTRY
+ };
+ 
++#if !defined(KHDAYS_BROWSER)
+ static SRWLOCK lock = SRWLOCK_INIT;
++#endif
+ static KhdaysShopView shown;
+ static int seen;
+ static u32 seen_at;
+@@ -166,10 +172,14 @@ void khdays_shop_update_ran(uintptr_t update)
+     if (step == KHDAYS_SHOP_NONE) {
+         if (seen && khdays_events_vblank_count() - seen_at > SEEN_FRAMES) {
+             seen = 0;
++#if !defined(KHDAYS_BROWSER)
+             AcquireSRWLockExclusive(&lock);
++#endif
+             shown.shown = 0;
+             ++shown.serial;
++#if !defined(KHDAYS_BROWSER)
+             ReleaseSRWLockExclusive(&lock);
++#endif
+         }
+         return;
+     }
+@@ -235,15 +245,23 @@ void khdays_shop_update_ran(uintptr_t update)
+     }
+     seen = 1;
+     seen_at = khdays_events_vblank_count();
++#if !defined(KHDAYS_BROWSER)
+     AcquireSRWLockExclusive(&lock);
++#endif
+     v.serial = shown.serial + 1u;
+     shown = v;
++#if !defined(KHDAYS_BROWSER)
+     ReleaseSRWLockExclusive(&lock);
++#endif
+ }
+ 
+ void khdays_shop_view(KhdaysShopView *out)
+ {
++#if !defined(KHDAYS_BROWSER)
+     AcquireSRWLockShared(&lock);
++#endif
+     *out = shown;
++#if !defined(KHDAYS_BROWSER)
+     ReleaseSRWLockShared(&lock);
++#endif
+ }

@@ -16,6 +16,7 @@ const MAX_ROM_SIZE = 512 * 1024 * 1024;
 const ROOT_DIRECTORY_ID = 0xf000;
 const encoder = new TextEncoder();
 const verifiedInspections = new WeakSet();
+const importingFilesystems = new WeakSet();
 function ascii(bytes) { return Array.from(bytes, b => b < 128 ? String.fromCharCode(b) : "\ufffd").join(""); }
 function text(bytes) { return ascii(bytes).split("\0", 1)[0].trim(); }
 function abort(signal) { if (signal?.aborted) throw new DOMException("ROM import cancelled.", "AbortError"); }
@@ -153,12 +154,28 @@ export async function inspectRom(file, options = {}) {
 // FS is Emscripten's filesystem API. Import only after the selected runtime's
 // before-start gate; callers must never send the File or extracted bytes online.
 export async function importRomToFileSystem(inspection, FS, { signal, onProgress, root = "/data/extracted" } = {}) {
-  const { file, header, sha256, supported, files, named_file_count } = inspection;
   if (!verifiedInspections.has(inspection)) throw new Error("The ROM must pass inspectRom before import.");
   if (!/^\/[a-zA-Z0-9_/-]+$/.test(root) || root.split("/").includes("..")) throw new Error("Invalid import directory.");
-  const output = `${root.replace(/\/$/,"")}/${sha256.slice(0,16)}`;
+  const output = `${root.replace(/\/$/,"")}/${inspection.sha256.slice(0,16)}`;
   abort(signal);
-  // A retried/aborted import must never leave an older completion marker.
+  if (importingFilesystems.has(FS)) throw new Error("This game instance is already importing a ROM.");
+  if (FS.analyzePath(output).exists) throw new Error("This ROM is already imported. Start a fresh game instance to reimport it.");
+  importingFilesystems.add(FS);
+  try {
+    // The native VFS explicitly ignores .partial directories. Keep streaming
+    // writes invisible until the entire extraction and its manifest are ready.
+    const staging = output + ".partial";
+    const { metadata, manifest } = await writeExtraction(inspection, FS, staging, { signal, onProgress });
+    abort(signal);
+    FS.rename(staging, output);
+    return { output, metadata, manifest };
+  } finally {
+    importingFilesystems.delete(FS);
+  }
+}
+
+async function writeExtraction(inspection, FS, output, { signal, onProgress }) {
+  const { file, header, sha256, supported, files, named_file_count } = inspection;
   if (FS.analyzePath(`${output}/manifest.json`).exists) FS.unlink(`${output}/manifest.json`);
   const system = [ ["header.bin",0,0x200], ["arm9.bin",header.arm9_offset,header.arm9_size],
     ["arm7.bin",header.arm7_offset,header.arm7_size],
@@ -190,7 +207,6 @@ export async function importRomToFileSystem(inspection, FS, { signal, onProgress
   const metadata = { schema_version:1,source:{ filename:file.name ?? "local-rom.nds",file_size:file.size,sha256,supported:true,supported_entry:supported },
     header,extraction:{ nitrofs_file_count:files.length,named_file_count,unnamed_file_count:files.length-named_file_count } };
   FS.writeFile(`${output}/metadata.json`, encoder.encode(JSON.stringify(metadata, null, 2) + "\n"));
-  // The manifest is the completion marker: a cancelled import has no manifest.
   FS.writeFile(`${output}/manifest.json`, encoder.encode(JSON.stringify(manifest, null, 2) + "\n"));
-  return { output, metadata, manifest };
+  return { metadata, manifest };
 }

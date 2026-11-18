@@ -1,0 +1,146 @@
+diff --git a/port/tools/prepare.py b/port/tools/prepare.py
+--- a/port/tools/prepare.py
++++ b/port/tools/prepare.py
+@@ -4080,6 +4080,25 @@
+         ),
+     ],
+ }
++
++# This one wrapper forwards a fabricated 64-bit argument to a definition that
++# takes no arguments (SoundMgr_Update and game/engine.h). Keep the surface
++# enqueue, its original argument, and its completion before sound maintenance;
++# only the nonexistent parameter/result forwarding is removed. Other query
++# wrappers and their argument expressions are deliberately left alone.
++FILE_HOOKS["src/engine/ForwardQuery64Result.c"] = [
++    (
++        "extern long long Gfx_EnqueueSurface(int a);\n"
++        "extern void SoundMgr_Update(long long v);",
++        "extern int Gfx_EnqueueSurface(int a);\n"
++        "extern void SoundMgr_Update(void);",
++    ),
++    (
++        "    SoundMgr_Update(Gfx_EnqueueSurface(data_0204be08[1] + 0xc));",
++        "    Gfx_EnqueueSurface(data_0204be08[1] + 0xc);\n"
++        "    SoundMgr_Update();",
++    ),
++]
+ 
+ FILE_HOOKS["src/overlays/scenes/ov002_field/Ov002_SetCaptionText.c"] = [
+     (
+diff --git a/port/tools/forward_query_abi_test.py b/port/tools/forward_query_abi_test.py
+new file mode 100644
+--- /dev/null
++++ b/port/tools/forward_query_abi_test.py
+@@ -0,0 +1,112 @@
++"""Exact ForwardQuery64Result argument/side-effect repair, not a generic rule."""
++from pathlib import Path
++import os
++import subprocess
++import sys
++import tempfile
++import unittest
++
++sys.path.insert(0, str(Path(__file__).resolve().parent))
++import prepare
++from references import rewrite_text
++from references.emit import EmitFailure, Index
++from references.preprocess import Flags, preprocess
++
++PATH = "src/engine/ForwardQuery64Result.c"
++SOURCE = """extern long long Gfx_EnqueueSurface(int a);
++extern void SoundMgr_Update(long long v);
++extern int data_0204be08[];
++void ForwardQuery64Result(void) {
++    SoundMgr_Update(Gfx_EnqueueSurface(data_0204be08[1] + 0xc));
++}
++"""
++
++
++def patched(source):
++    for before, after in prepare.FILE_HOOKS[PATH]:
++        if source.count(before) != 1:
++            raise AssertionError("exact pinned query hook must match once")
++        source = source.replace(before, after)
++    return source
++
++
++def index():
++    return Index(game_functions={"Gfx_EnqueueSurface", "SoundMgr_Update", "ForwardQuery64Result"},
++                 game_objects=set(), discarded_returns={"Gfx_EnqueueSurface": "i32"})
++
++
++class ForwardQueryABI(unittest.TestCase):
++    def test_original_used_wrong_class_argument_remains_rejected(self):
++        with self.assertRaisesRegex(EmitFailure, "Gfx_EnqueueSurface: used return value"):
++            rewrite_text(SOURCE, PATH, index())
++
++    def test_exact_hook_preserves_argument_and_splits_side_effects_in_order(self):
++        result = patched(SOURCE)
++        self.assertIn("extern int Gfx_EnqueueSurface(int a);", result)
++        self.assertIn("extern void SoundMgr_Update(void);", result)
++        self.assertIn("Gfx_EnqueueSurface(data_0204be08[1] + 0xc);\n    SoundMgr_Update();", result)
++        rewrite_text(result, PATH, index())
++
++    def test_variants_and_genuine_argument_consumers_are_not_generalized(self):
++        with self.assertRaisesRegex(AssertionError, "exact pinned"):
++            patched(SOURCE.replace("data_0204be08[1]", "data_0204be08[2]"))
++        # Correcting this proven no-argument wrapper must not legalize another
++        # consumer's actual use of the mismatched result as a 64-bit argument.
++        source = SOURCE.replace("SoundMgr_Update", "ActualArgumentConsumer")
++        with self.assertRaisesRegex(EmitFailure, "used return value"):
++            rewrite_text(source, "src/adjacent_query.c", index())
++
++    @unittest.skipUnless(os.environ.get("KHDAYS_TEST_DECOMP"), "set KHDAYS_TEST_DECOMP for pinned contracts")
++    def test_pinned_callee_contracts_and_callers(self):
++        root = Path(os.environ["KHDAYS_TEST_DECOMP"])
++        patched((root/PATH).read_text())
++        self.assertIn("void SoundMgr_Update(void)", (root/"src/engine/SoundMgr_Update.c").read_text())
++        self.assertIn("int Gfx_EnqueueSurface(int param_1)", (root/"src/engine/Gfx_EnqueueSurface.c").read_text())
++        header = (root/"include/game/engine.h").read_text()
++        self.assertIn("void SoundMgr_Update(void);", header)
++        self.assertIn("int Gfx_EnqueueSurface(int param_1);", header)
++        for caller in ["PauseMenu_Frame", "PauseMenu_ConfirmFrame"]:
++            self.assertIn("extern void ForwardQuery64Result(void);", (root/("src/engine/"+caller+".c")).read_text())
++
++    @unittest.skipUnless(os.environ.get("KHDAYS_TEST_DECOMP") and os.environ.get("KHDAYS_TEST_EMCC"),
++                         "set pinned source and Emscripten for Wasm execution")
++    def test_real_rewritten_wrapper_calls_once_in_order_with_varying_arguments(self):
++        root = Path(os.environ["KHDAYS_TEST_DECOMP"])
++        source = patched((root/PATH).read_text())
++        main = """
++int data_0204be08[2];
++static int phase, calls, error, expected;
++int Gfx_EnqueueSurface(int argument) {
++    if(phase || argument!=expected) error=1;
++    phase=1; return calls&1 ? -12345 : 2147483647;
++}
++void SoundMgr_Update(void) {if(phase!=1) error=2;phase=2;++calls;}
++void ForwardQuery64Result(void);
++int main(void) {
++    int values[4]={0,4,4080,-16};
++    for(int i=0;i<4;++i) {
++        data_0204be08[1]=values[i]; expected=values[i]+12; phase=0;
++        ForwardQuery64Result(); if(error || phase!=2 || calls!=i+1) return i+1;
++    }
++    return 0;
++}
++"""
++        with tempfile.TemporaryDirectory(prefix="days-forward-query-") as temp:
++            folder = Path(temp)
++            (folder/"khdays_references.h").write_text(
++                "typedef unsigned int khdays_ref;\n#define KHDAYS_W(r) ((void *)(r))\n"
++                "#define KHDAYS_REF(p) ((khdays_ref)(p))\n")
++            raw = folder/"wrapper.raw.c"; raw.write_text(source)
++            cooked = preprocess(raw, Flags(), dict(os.environ), os.environ["KHDAYS_TEST_EMCC"], backend="clang")
++            (folder/"wrapper.c").write_text(rewrite_text(cooked, PATH, index()))
++            (folder/"main.c").write_text(main)
++            result = folder/"query.cjs"
++            subprocess.run([os.environ["KHDAYS_TEST_EMCC"], "-std=c17", "-O0", "-I", str(folder),
++                            str(folder/"wrapper.c"), str(folder/"main.c"), "-sENVIRONMENT=node",
++                            "-sSINGLE_FILE=1", "-sWASM_ASYNC_COMPILATION=0", "-sEXIT_RUNTIME=1", "-Werror",
++                            "-Wno-unknown-pragmas", "-Wl,--fatal-warnings", "-o", str(result)], check=True)
++            subprocess.run([os.environ.get("KHDAYS_TEST_NODE", "node"), str(result)], check=True)
++
++
++if __name__ == "__main__":
++    unittest.main()

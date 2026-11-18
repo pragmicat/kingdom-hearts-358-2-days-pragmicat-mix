@@ -1,0 +1,50 @@
+diff --git a/port/runtime/missions/missions.c b/port/runtime/missions/missions.c
+index 4e936f8..8218e7c 100644
+--- a/port/runtime/missions/missions.c
++++ b/port/runtime/missions/missions.c
+@@ -23,6 +23,14 @@
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
++#if defined(KHDAYS_BROWSER)
++#include <strings.h>
++#define path_casecmp strcasecmp
++#define path_ncasecmp strncasecmp
++#else
++#define path_casecmp _stricmp
++#define path_ncasecmp _strnicmp
++#endif
+ 
+ extern KhdaysRef ExpHeap_AllocOrDefault(unsigned int size, int align, KhdaysRef heap);
+ extern void NNS_FndFreeToExpHeap(KhdaysRef heap, KhdaysRef block);
+@@ -383,11 +391,14 @@ int khdays_missions_eligible(const void *record, unsigned int flags)
+ static int list_language(const char *path)
+ {
+     static const char head[] = "UI/cm/msl_";
+-    if (_strnicmp(path, head, sizeof(head) - 1) != 0 || _stricmp(path + sizeof(head) + 1, ".msi.z") != 0) {
++    static const char suffix[] = ".msi.z";
++    const size_t prefix = sizeof(head) - 1;
++    if (strlen(path) != prefix + 2 + sizeof(suffix) - 1 ||
++        path_ncasecmp(path, head, prefix) != 0 || path_casecmp(path + prefix + 2, suffix) != 0) {
+         return -1;
+     }
+     for (int l = 0; l < KHDAYS_MISSION_LANGUAGES; ++l) {
+-        if (_strnicmp(path + sizeof(head) - 1, khdays_mission_language(l), 2) == 0) {
++        if (path_ncasecmp(path + prefix, khdays_mission_language(l), 2) == 0) {
+             return l;
+         }
+     }
+@@ -406,10 +417,10 @@ void *khdays_missions_file_loaded(unsigned top, void *buffer, unsigned size, voi
+     }
+     if ((language = list_language(path)) >= 0) {
+         made = khdays_tables_list(buffer, size, &registry, language, &made_size);
+-    } else if (_stricmp(path, "mi/mi/mdb.z") == 0) {
++    } else if (path_casecmp(path, "mi/mi/mdb.z") == 0) {
+         made = khdays_tables_mdb(buffer, size, &registry, &made_size);
+-    } else if (_stricmp(path, "mi/mi/trbox") == 0 || _stricmp(path, "mi/mi/evi") == 0) {
+-        made = khdays_tables_placed(buffer, size, &registry, &store, _stricmp(path, "mi/mi/trbox") == 0, &made_size);
++    } else if (path_casecmp(path, "mi/mi/trbox") == 0 || path_casecmp(path, "mi/mi/evi") == 0) {
++        made = khdays_tables_placed(buffer, size, &registry, &store, path_casecmp(path, "mi/mi/trbox") == 0, &made_size);
+     }
+     if (made == NULL) {
+         return buffer;

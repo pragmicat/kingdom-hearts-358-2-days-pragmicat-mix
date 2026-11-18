@@ -1,0 +1,496 @@
+diff --git a/port/tools/prepare.py b/port/tools/prepare.py
+index ac09dc9..1cb4a4b 100644
+--- a/port/tools/prepare.py
++++ b/port/tools/prepare.py
+@@ -5448,6 +5448,8 @@ def rewrite_game(
+     absolute: dict[str, int],
+     functions: dict[str, int],
+     dispatched: dict[str, int],
++    *, backend: str = "msvc", executable: str | None = None, processes: int | None = None,
++    abi_profile: str = "windows-x64",
+ ) -> tuple[list[str], int]:
+     """The game's C (`sources`: (path compiled, original relative path)) and
+     the HAL rewritten into out/rewritten (port/tools/references)."""
+@@ -5460,7 +5462,8 @@ def rewrite_game(
+     ]
+     thunks = {n for n in functions if n.startswith("khdays_ovcall_")}
+     outputs, size = rewrite_all(
+-        jobs, Program(absolute=dict(absolute), functions=functions, game_functions=thunks, dispatched=dispatched), out
++        jobs, Program(absolute=dict(absolute), functions=functions, game_functions=thunks, dispatched=dispatched), out,
++        processes=processes, backend=backend, executable=executable, abi_profile=abi_profile,
+     )
+     return outputs, size
+ 
+@@ -5472,7 +5475,18 @@ def cmake_list(name: str, paths: list[str]) -> str:
+ def main() -> int:
+     ap = argparse.ArgumentParser()
+     ap.add_argument("--out", default=str(ROOT / "build" / "port" / "gen-x64"))
++    ap.add_argument("--preprocessor", choices=("msvc", "clang"), default="msvc",
++                    help="Clang selects the pinned Emscripten preprocessing/wasm32 profile")
++    ap.add_argument("--compiler", help="Preprocessor driver path (defaults to cl or emcc)")
++    ap.add_argument("--jobs", type=int, help="Reference pass worker count")
++    ap.add_argument("--abi-profile", choices=("windows-x64", "wasm32"),
++                    help="Defaults to windows-x64 with MSVC, wasm32 with Emscripten Clang")
+     args = ap.parse_args()
++    args.abi_profile = args.abi_profile or ("wasm32" if args.preprocessor == "clang" else "windows-x64")
++    if (args.preprocessor, args.abi_profile) not in (("msvc", "windows-x64"), ("clang", "wasm32")):
++        ap.error("Use MSVC/windows-x64 or Emscripten Clang/wasm32 together.")
++    if args.jobs is not None and args.jobs < 1:
++        ap.error("--jobs must be positive")
+     out = Path(args.out).resolve()  # sources.cmake names its files absolutely
+     patched_dir = out / "patched"
+     patched_dir.mkdir(parents=True, exist_ok=True)
+@@ -6092,7 +6106,9 @@ def main() -> int:
+     # into the ROM's code reach it as a call through its DS address does
+     dispatched_calls = {n: a for n, a in functions.items() if n.startswith("khdays_ovcall_")}
+     dispatched_calls.update({n: absolute[n] for n in rom_run if n in absolute})
+-    rewritten, area = rewrite_game(out, c_sources, placed, functions, dispatched_calls)
++    rewritten, area = rewrite_game(out, c_sources, placed, functions, dispatched_calls,
++                                   backend=args.preprocessor, executable=args.compiler, processes=args.jobs,
++                                   abi_profile=args.abi_profile)
+     # the port's side calls the game's functions the host's way: none of
+     # those taking their arguments in a block (references/emit.py)
+     block = set((out / "references_block_abi.txt").read_text(encoding="utf-8").split())
+diff --git a/port/tools/references/build.py b/port/tools/references/build.py
+index 1bb2ea7..8730410 100644
+--- a/port/tools/references/build.py
++++ b/port/tools/references/build.py
+@@ -10,6 +10,7 @@ import hashlib
+ import json
+ import os
+ import re
++import subprocess
+ import traceback
+ import zlib
+ from concurrent.futures import ProcessPoolExecutor
+@@ -51,23 +52,30 @@ _env = _cl = _flags = None
+ _cache: Path | None = None
+ _tools = ""
+ _flags_key = ""
++_backend = "msvc"
++_abi_profile = "windows-x64"
+ _stats: dict[str, list[int] | None] = {}
+ 
+ 
+-def _init(cache: str, tools: str, arch: str):
+-    global _env, _cl, _flags, _cache, _tools, _flags_key
++def _init(cache: str, tools: str, arch: str, backend: str = "msvc", executable: str | None = None,
++          abi_profile: str = "windows-x64"):
++    global _env, _cl, _flags, _cache, _tools, _flags_key, _backend, _abi_profile
+     import sys
+ 
+     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+     import build as native_build
+     from .preprocess import Flags, compiler
+ 
+-    _env = native_build.msvc_env(arch)  # preprocessed as that compiler sees it
+-    _cl = compiler(_env)
++    _backend, _abi_profile = backend, abi_profile
++    _env = dict(os.environ) if backend == "clang" else native_build.msvc_env(arch)
++    _cl = compiler(_env, backend, executable)
+     _flags = Flags.game_side()
+-    _flags_key = hashlib.sha1("\n".join(_flags.arguments()).encode()).hexdigest()
++    version = subprocess.check_output([_cl, "--version"], env=_env, text=True).splitlines()[0] if backend == "clang" else ""
++    _flags_key = hashlib.sha1("\n".join([backend, _cl, version, *_flags.arguments(backend)]).encode()).hexdigest()
+     _cache = Path(cache)
+-    _tools = tools
++    # ABI changes invalidate parsed shapes/emission while retaining valid raw
++    # preprocessing output, whose identity is independently in _flags_key.
++    _tools = tools + "|abi=" + abi_profile
+ 
+ 
+ def tools_key() -> str:
+@@ -107,12 +115,13 @@ def _stat(path: str) -> list[int] | None:
+     return _stats[path]
+ 
+ 
+-LINE_MARKER = re.compile(r'^#line \d+ "((?:[^"\\]|\\.)*)"', re.M)
++LINE_MARKER = re.compile(r'^#(?:line[ \t]+|[ \t]+)\d+[ \t]+"((?:[^"\\]|\\.)*)"', re.M)
+ 
+ 
+ def _sources_of(text: str) -> list[str]:
+     """The files a preprocessed text came from, by its line markers."""
+-    return sorted({m[1].replace("\\\\", "\\") for m in LINE_MARKER.finditer(text)})
++    return sorted({m[1].replace("\\\\", "\\") for m in LINE_MARKER.finditer(text)
++                   if not (m[1].startswith("<") and m[1].endswith(">"))})
+ 
+ 
+ def _entry(source: str) -> tuple[Path, Path]:
+@@ -149,7 +158,7 @@ def _source_text(source: str, meta: dict | None) -> tuple[str, str]:
+     if meta is not None:
+         raw = zlib.decompress(_entry(source)[1].read_bytes()).decode("utf-8")
+     else:
+-        raw = preprocess(Path(source), _flags, _env, _cl, raw=True)
++        raw = preprocess(Path(source), _flags, _env, _cl, raw=True, backend=_backend)
+     return raw, iso_dialect(raw)
+ 
+ 
+@@ -161,23 +170,29 @@ def _parse_text(source: str, text: str):
+     return ast, TypePass().run(ast)
+ 
+ 
+-def _hidden_result(layout, t) -> bool:
++def _hidden_result(layout, t, abi_profile: str = "windows-x64") -> bool:
+     """Whether a function returns a struct through a pointer its caller
+     passes: on the ARM in r0, natively one the compiler adds (MSVC and the
+     System V ABIs return structs of 1, 2, 4 or 8 bytes in registers -- x64
+     System V up to 16, which this does not take for registers yet)."""
+     from .types import Record
++    if abi_profile == "wasm32":
++        from .wasm_abi import hidden_result
++        return hidden_result(layout, t)
+ 
+     return isinstance(t.result, Record) and layout.size(t.result) not in (1, 2, 4, 8)
+ 
+ 
+-def _shape(layout, t) -> list | None:
++def _shape(layout, t, abi_profile: str = "windows-x64") -> list | None:
+     """A function type's parameters as the DS's stack holds them: each one's
+     kind and size (a struct by value, a floating value, a word or two), and
+     `...`; None when unprototyped. Two declarations of one function whose
+     shapes differ (a struct where the definition reads two ints) agree on the
+     DS -- and on x86 -- word for word, not on x64 (emit.py's block)."""
+     from .types import Arithmetic, Record, decayed
++    if abi_profile == "wasm32":
++        from .wasm_abi import prototype_shape
++        return prototype_shape(layout, t)
+ 
+     if t.params is None:
+         return None
+@@ -207,14 +222,21 @@ def _definitions(source: str):
+     # definition's first ("def"), then each prototype's ("decl"; None for one
+     # without) -- and whether it returns a struct through a hidden pointer
+     shapes: dict[str, list] = {}
++    shape_errors = []
+     layout = Layout(tp)
+ 
+     def note(name, symbol, defined):
+         if symbol is None or "static" in symbol.storage or not isinstance(symbol.type, Function):
+             return
+-        shapes.setdefault(name, []).append(
+-            ["def" if defined else "decl", _shape(layout, symbol.type), _hidden_result(layout, symbol.type)]
+-        )
++        try:
++            entry = ["def" if defined else "decl", _shape(layout, symbol.type, _abi_profile),
++                     _hidden_result(layout, symbol.type, _abi_profile)]
++            if _abi_profile == "wasm32":
++                from .wasm_abi import return_signature
++                entry.append(return_signature(layout, symbol.type))
++            shapes.setdefault(name, []).append(entry)
++        except Exception as error:
++            shape_errors.append(f"{name}: {type(error).__name__}: {error}")
+ 
+     for ext in ast.ext:
+         if isinstance(ext, c_ast.FuncDef):
+@@ -227,6 +249,8 @@ def _definitions(source: str):
+         elif isinstance(ext, c_ast.Decl) and ext.name is not None and not isinstance(ext.type, c_ast.FuncDecl):
+             if "extern" not in ext.storage and "static" not in ext.storage and "typedef" not in ext.storage:
+                 objects.append(ext.name)
++    if shape_errors:
++        return source, functions, objects, shapes, "; ".join(shape_errors)
+     files = {p: _stat(p) for p in _sources_of(text) + [source] + [str(f) for f in _flags.forced]}
+     if all(stamp is not None for stamp in files.values()):
+         _entry(source)[1].write_bytes(zlib.compress(raw.encode("utf-8"), 6))
+@@ -351,29 +375,44 @@ def _index_key(index) -> str:
+ 
+ 
+ def rewrite_all(
+-    jobs: list[tuple[str, str]], program: Program, gen: Path, processes: int | None = None, arch: str = "x64"
++    jobs: list[tuple[str, str]], program: Program, gen: Path, processes: int | None = None, arch: str = "x64",
++    backend: str = "msvc", executable: str | None = None, abi_profile: str | None = None,
+ ):
+     """Each (source, output) rewritten; the numbers into gen/khdays_data_area.h.
+     Returns the outputs in the order given and the data area's size; stops
+     naming every file that failed."""
+     from .emit import Index
++    abi_profile = abi_profile or ("wasm32" if backend == "clang" else "windows-x64")
++    if (backend, abi_profile) not in (("msvc", "windows-x64"), ("clang", "wasm32")):
++        raise ValueError("Use MSVC/windows-x64 or Emscripten Clang/wasm32 together.")
++    if backend == "clang":
++        from .preprocess import compiler
++        driver = compiler(dict(os.environ), backend, executable)
++        version = subprocess.check_output([driver, "--version"], text=True).splitlines()[0]
++        if "4.0.23" not in version or "emcc" not in version:
++            raise ValueError("The wasm32 profile requires the verified Emscripten 4.0.23 emcc driver.")
+ 
+     processes = processes or max(1, (os.cpu_count() or 2) - 1)
+     cache = gen / "references"
+     cache.mkdir(parents=True, exist_ok=True)
+-    with ProcessPoolExecutor(processes, initializer=_init, initargs=(str(cache), tools_key(), arch)) as pool:
++    with ProcessPoolExecutor(processes, initializer=_init,
++                             initargs=(str(cache), tools_key(), arch, backend, executable, abi_profile)) as pool:
+         found = list(pool.map(_definitions, [s for s, _ in jobs], chunksize=32))
+         failures = [f"{s}: {err}" for s, _, _, _, err in found if err]
+         if failures:
+             raise SystemExit("references: the game's side does not parse:\n" + "\n".join(failures[:50]))
+         game_functions = {n for _, fs, _, _, _ in found for n in fs} | program.game_functions
+-        mismatched = hidden_result_mismatches(found, game_functions)
++        if abi_profile == "wasm32":
++            from .wasm_abi import mismatched_returns, block_abi as wasm_block_abi
++            mismatched = mismatched_returns(found, game_functions)
++        else:
++            mismatched = hidden_result_mismatches(found, game_functions)
+         if mismatched:
+             raise SystemExit(
+                 "references: declarations that return a struct otherwise than their definition "
+                 "(through a hidden pointer on one side only): " + ", ".join(mismatched)
+             )
+-        variadic = block_abi(found, game_functions)
++        variadic = wasm_block_abi(found, game_functions) if abi_profile == "wasm32" else block_abi(found, game_functions)
+         report = "".join(f"{n}\n" for n in sorted(variadic))
+         target = gen / "references_block_abi.txt"
+         if not target.exists() or target.read_text(encoding="utf-8") != report:
+diff --git a/port/tools/references/preprocess.py b/port/tools/references/preprocess.py
+index 071841a..07515dc 100644
+--- a/port/tools/references/preprocess.py
++++ b/port/tools/references/preprocess.py
+@@ -39,7 +39,12 @@ class Flags:
+             forced=[PORT / "compat" / "decomp_compat.h"],
+         )
+ 
+-    def arguments(self) -> list[str]:
++    def arguments(self, backend: str = "msvc") -> list[str]:
++        if backend == "clang":
++            return ([f"-I{p}" for p in self.includes] + [f"-D{d}" for d in self.defines]
++                    + [argument for path in self.forced for argument in ("-include", str(path))])
++        if backend != "msvc":
++            raise ValueError(f"unknown reference preprocessor: {backend}")
+         return [f"/I{p}" for p in self.includes] + [f"/D{d}" for d in self.defines] + [f"/FI{p}" for p in self.forced]
+ 
+ 
+@@ -65,17 +70,22 @@ class PreprocessError(Exception):
+     pass
+ 
+ 
+-def compiler(env: dict[str, str]) -> str:
+-    cl = shutil.which("cl", path=env.get("PATH") or env.get("Path"))
++def compiler(env: dict[str, str], backend: str = "msvc", executable: str | None = None) -> str:
++    name = executable or ("emcc" if backend == "clang" else "cl")
++    cl = shutil.which(name, path=env.get("PATH") or env.get("Path"))
+     if cl is None:
+-        raise PreprocessError("no cl in the Visual Studio environment")
++        raise PreprocessError(f"no {name} in the selected {backend} environment")
+     return cl
+ 
+ 
+-def preprocess(source: Path, flags: Flags, env: dict[str, str], cl: str | None = None, raw: bool = False) -> str:
++def preprocess(source: Path, flags: Flags, env: dict[str, str], cl: str | None = None, raw: bool = False,
++               backend: str = "msvc") -> str:
+     """`source` preprocessed (line markers kept), in ISO C's dialect -- or as
+     the preprocessor wrote it, `raw`."""
+-    args = [cl or compiler(env), "/nologo", "/E", "/Zp4"] + flags.arguments()
++    if backend == "clang":
++        args = [cl or compiler(env, backend), "-E", "-fms-extensions", "-fpack-struct=4"] + flags.arguments(backend)
++    else:
++        args = [cl or compiler(env), "/nologo", "/E", "/Zp4"] + flags.arguments(backend)
+     if source.suffix == ".cpp":
+         raise PreprocessError(f"{source}: C++ is not the type pass's")
+     r = subprocess.run(
+diff --git a/port/tools/references/wasm_abi.py b/port/tools/references/wasm_abi.py
+new file mode 100644
+index 0000000..2dba03c
+--- /dev/null
++++ b/port/tools/references/wasm_abi.py
+@@ -0,0 +1,202 @@
++"""Audited wasm32 C ABI subset for the Days reference rewrite.
++
++Target: Emscripten 4.0.23 / LLVM 5243501cca02d7e54294d4bb5de0a85b06c40b7d,
++ordinary C ABI, game records compiled with -fpack-struct=4. This classifies
++emitted game types, whose pointers become 32-bit references; the game's data
++and argument-block layout does not change.
++
++Primary sources in that LLVM commit: clang/lib/CodeGen/Targets/WebAssembly.cpp
++and clang/lib/CodeGen/ABIInfoImpl.cpp (single-element/default classification).
++"""
++from __future__ import annotations
++
++from dataclasses import dataclass
++
++from .types import Array, Arithmetic, Enumeration, Function, Pointer, Record, TypeFailure, Void, decayed
++
++
++class UnsupportedWasmABI(TypeFailure):
++    """Stop generation when the modeled layout cannot establish the C ABI."""
++
++
++@dataclass(frozen=True)
++class ValueABI:
++    kind: str  # direct, indirect, ignore
++    scalar: str | None
++    size: int
++    alignment: int  # game record-member alignment, not Wasm stack alignment
++
++    @property
++    def signature(self) -> str:
++        if self.kind == "direct":
++            return self.scalar or "void"
++        return "sret" if self.kind == "indirect" else "void"
++
++
++def _fail(t, message: str):
++    node = t.definition.node if isinstance(t, Record) else None
++    raise UnsupportedWasmABI(node, "wasm32 ABI: " + message)
++
++
++def _array_count(layout, t: Array) -> int:
++    if t.length is None:
++        _fail(t, "a flexible/incomplete array in a by-value record is not supported")
++    count = layout.value(t.length)
++    if count < 0:
++        _fail(t, "a negative array extent is not supported")
++    return count
++
++
++def _validate(layout, t) -> None:
++    if isinstance(t, Arithmetic):
++        if t.spelling == "long double":
++            _fail(t, "long double is 16 bytes on this target, not the game's modeled 8 bytes")
++        if t.spelling not in {
++            "_Bool", "char", "signed char", "unsigned char", "short", "unsigned short",
++            "int", "unsigned int", "long", "unsigned long", "long long", "unsigned long long", "float", "double",
++        }:
++            _fail(t, f"scalar {t.spelling!r} is not classified")
++        return
++    if isinstance(t, Enumeration):
++        # The upstream enum type lacks a link to its declaration. Conservatively
++        # refuse wider enumerators in a TU containing a by-value enum signature.
++        for symbol in layout.tp.file.ordinary.values():
++            if symbol.kind == "enumerator":
++                value = layout.enumerator(symbol)
++                if not -(1 << 31) <= value <= (1 << 32) - 1:
++                    _fail(t, f"wide enumerator {symbol.name} needs an explicit underlying-type model")
++        return
++    if isinstance(t, (Pointer, Void)):
++        return
++    if isinstance(t, Array):
++        _array_count(layout, t)
++        _validate(layout, t.element)
++        return
++    if not isinstance(t, Record):
++        _fail(t, f"a by-value {type(t).__name__} is not classified")
++    definition = t.definition
++    if definition.kind != "struct":
++        _fail(t, f"by-value {definition.kind} {definition.tag or '<anonymous>'} requires an explicit ABI audit")
++    if definition.node is None or definition.fields is None:
++        _fail(t, "an incomplete record has no established ABI")
++    for member, bits in layout.members(definition.node):
++        if bits is not None:
++            _fail(t, f"bit-fields in by-value {definition.spelling or 'struct'} require an explicit ABI audit")
++        _validate(layout, member)
++    layout.measure(t)
++
++
++def _empty(layout, t) -> bool:
++    if isinstance(t, Array):
++        return _array_count(layout, t) == 0 or _empty(layout, t.element)
++    if isinstance(t, Record):
++        return all(_empty(layout, member) for member, _ in layout.members(t.definition.node))
++    return False
++
++
++def _single_scalar(layout, t: Record):
++    members = [member for member, _ in layout.members(t.definition.node) if not _empty(layout, member)]
++    if len(members) != 1:
++        return None
++    member = members[0]
++    while isinstance(member, Array) and _array_count(layout, member) == 1:
++        member = member.element
++    if isinstance(member, Record):
++        member = _single_scalar(layout, member)
++    elif isinstance(member, Array):
++        return None
++    if member is None or layout.size(t) != layout.size(member):
++        return None
++    return member
++
++
++def _scalar(layout, t) -> str:
++    if isinstance(t, Arithmetic) and t.floating:
++        return "f32" if t.spelling == "float" else "f64"
++    return "i64" if layout.size(t) == 8 else "i32"
++
++
++def classify(layout, t) -> ValueABI:
++    """Multi-member records are indirect regardless of size; a single scalar
++    may be direct only without extra padding. Empty C records are ignored.
++    Unions, bit-fields and flexible arrays require a separate audit.
++    """
++    _validate(layout, t)
++    if isinstance(t, (Array, Function)):
++        _fail(t, "an array/function cannot be passed or returned as a C value")
++    if isinstance(t, Void):
++        return ValueABI("ignore", None, 0, 1)
++    size, alignment = layout.measure(t)
++    if isinstance(t, Record):
++        if _empty(layout, t):
++            return ValueABI("ignore", None, size, alignment)
++        member = _single_scalar(layout, t)
++        if member is None:
++            return ValueABI("indirect", None, size, alignment)
++        return ValueABI("direct", _scalar(layout, member), size, alignment)
++    return ValueABI("direct", _scalar(layout, t), size, alignment)
++
++
++def hidden_result(layout, function: Function) -> bool:
++    return classify(layout, function.result).kind == "indirect"
++
++
++def return_signature(layout, function: Function) -> str:
++    """Result class for rejecting direct i32/f32/f64/i64 and sret differences."""
++    value = classify(layout, function.result)
++    return f"sret:{value.size}:{value.alignment}" if value.kind == "indirect" else value.signature
++
++
++def parameter_shape(layout, parameter) -> list:
++    """Conservative ABI class plus the existing DS four-byte word count.
++    Preserve aggregate/scalar distinctions even where their raw class agrees.
++    """
++    parameter = decayed(parameter)
++    value = classify(layout, parameter)
++    aggregate = "s" if isinstance(parameter, Record) else "w"
++    kind = f"{aggregate}:{value.kind}:{value.scalar or '-'}:{value.size}:{value.alignment}"
++    return [kind, (value.size + 3) // 4]
++
++
++def prototype_shape(layout, function: Function) -> list | None:
++    classify(layout, function.result)
++    if function.params is None:
++        return None
++    shape = [parameter_shape(layout, parameter) for parameter in function.params]
++    return shape + [["...", 0]] if function.variadic else shape
++
++
++def mismatched_returns(found, game_functions: set[str]) -> list[str]:
++    """Wasm metadata entries are [kind, arguments, hidden, result-class]."""
++    entries: dict[str, list] = {}
++    for _, _, _, shapes, _ in found:
++        for name, records in shapes.items():
++            entries.setdefault(name, []).extend(records)
++    mismatched = []
++    for name, records in sorted(entries.items()):
++        if name not in game_functions:
++            continue
++        if any(len(entry) < 4 for entry in records):
++            raise UnsupportedWasmABI(None, f"wasm32 ABI: missing return-class metadata for {name}")
++        defined = next((entry[3] for entry in records if entry[0] == "def"), None)
++        if defined is not None and any(entry[3] != defined for entry in records):
++            mismatched.append(f"{name} (defined {defined})")
++    return mismatched
++
++
++def block_abi(found, game_functions: set[str]) -> set[str]:
++    """Wasm needs exact arity/classes; matching prefixes are insufficient."""
++    entries: dict[str, list] = {}
++    for _, _, _, shapes, _ in found:
++        for name, records in shapes.items():
++            entries.setdefault(name, []).extend(records)
++    block = set()
++    for name, records in entries.items():
++        if name not in game_functions:
++            continue
++        defined = next((entry[1] for entry in records if entry[0] == "def"), None)
++        if any(entry[1] is not None and ["...", 0] in entry[1] for entry in records):
++            block.add(name)
++        elif defined is not None and any(entry[1] != defined for entry in records):
++            block.add(name)
++    return block
