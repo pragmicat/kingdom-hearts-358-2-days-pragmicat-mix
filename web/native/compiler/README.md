@@ -99,12 +99,22 @@ surface arguments.
 64-bit result and explicitly extracts the quotient for the input repeat timer.
 The real rewritten routine and HAL pass the Wasm regression at normal and
 wraparound boundaries.
+`pxi-init-void-contract.patch` also makes the original PXI initializer match
+its callers and the FIFO initializer's void contract. The original wrapper
+fails the Wasm return check. The repaired wrapper links and calls the provided
+FIFO initializer once.
+`irq-eight-void-veneers.patch` aligns the eight DMA and timer entry points with
+the real interrupt table and `OSi_IrqCallback`. WebAssembly dispatch through
+the original table type confirms the slot order, one-shot clearing, rearming,
+interrupt flags and disable masks.
 
-Other original callers still read incompatible returns and need individual
-source fixes. The allocator free callback needs matching argument and return
-declarations along its vtable path. Keep the preprocessing cache on the next
-attempt. The executable still needs the full rewrite, link and cartridge boot
-before gameplay testing.
+The resumed whole-game run with the initial discarded-return repair emitted
+21,869 files. It reported additional incompatible returns and callback
+signatures before it could write `sources.cmake`. Remaining examples include
+the sleep alarm callback and the allocator free callbacks' vtable signatures.
+Rerun with the exact source repairs above, using the existing preprocessing
+cache. Gameplay testing still needs a complete rewrite, full link and cartridge
+boot.
 
 The upstream MIT notice is preserved in `UPSTREAM_LICENSE.txt`. The ABI model
 was independently authored from the target's behavior and primary LLVM

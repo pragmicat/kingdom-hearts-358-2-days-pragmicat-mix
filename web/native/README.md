@@ -146,6 +146,8 @@ Initialize its pinned decompilation submodule before source generation.
 18. `compiler/forward-query-void-consumer.patch`
 19. `profile-services/runtime-browser-profile-defaults.patch`
 20. `compiler/key-repeat-quotient-lowword.patch`
+21. `compiler/pxi-init-void-contract.patch`
+22. `compiler/irq-eight-void-veneers.patch`
 
 Run the upstream generator with the Emscripten SDK active:
 

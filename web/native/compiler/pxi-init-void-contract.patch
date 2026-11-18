@@ -1,0 +1,23 @@
+diff --git a/port/tools/prepare.py b/port/tools/prepare.py
+index 2cccc78..3d63043 100644
+--- a/port/tools/prepare.py
++++ b/port/tools/prepare.py
+@@ -304,6 +304,18 @@ HOOKS = {
+     # NitroSDK's PXI without the IPC registers: the three functions that touch them hand the words
+     # to the port's transport (runtime/core/pxi.h); the callbacks, the interrupt and the dispatch
+     # stay the SDK's.
++    "main@0200926c": [  # PXI_Init: the SDK callers and real FIFO initializer return void
++        (
++            "extern void *PXI_InitFifo();\n\n"
++            "void *PXI_Init() {\n"
++            "    return PXI_InitFifo();\n"
++            "}",
++            "extern void PXI_InitFifo(void);\n\n"
++            "void PXI_Init(void) {\n"
++            "    PXI_InitFifo();\n"
++            "}",
++        ),
++    ],
+     "main@02009278": [  # PXI_InitFifo
+         (
+             "        *(volatile unsigned short *)0x04000184 = 0xc408;\n",
