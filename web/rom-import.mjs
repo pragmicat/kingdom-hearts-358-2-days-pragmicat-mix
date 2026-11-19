@@ -1,6 +1,7 @@
 // Browser-local importer matching khdays-port v0.1.5 tools/extract_data.py.
 // This module is an import component, not a browser game engine. The native
 // Pragmicat Mix DLL still requires a genuine WebAssembly runtime port.
+import { openCartridgeFile } from "./rom-archive.mjs";
 import { Sha256 } from "./sha256.mjs";
 
 export const SUPPORTED_ROMS = Object.freeze([
@@ -133,7 +134,8 @@ export async function hashRom(file, { signal, onProgress } = {}) {
   return { sha256: full.hex(), sha256_header_free: headerFree.hex(), hash_size: hashSize };
 }
 
-export async function inspectRom(file, options = {}) {
+export async function inspectRom(selected, options = {}) {
+  const file = await openCartridgeFile(selected, MAX_ROM_SIZE, options);
   abort(options.signal);
   const headerBytes = await read(file, 0, 0x200, "ROM header");
   const header = parseHeader(headerBytes, file.size);

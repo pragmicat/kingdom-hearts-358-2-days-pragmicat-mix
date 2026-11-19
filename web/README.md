@@ -5,8 +5,12 @@ Pragmicat combat and its Lua practice host. The user explicitly requires this
 architecture. A DS emulator is not a substitute. There is no playable browser
 game in this source yet.
 
-`rom-import.mjs` validates supported NA/EU revision-zero cartridge hashes and
-extracts their original files into an Emscripten filesystem, entirely locally.
+The browser importer accepts a raw `.nds` or a ZIP containing one `.nds`. It
+reads only that cartridge from a stored or deflated single-volume archive.
+Other files can stay in the ZIP. Decompression, the archive checksum, and
+the supported NA/EU revision-zero cartridge hash checks run on the player's
+device. The verified cartridge supplies the original files to Emscripten.
+The import progress callback reports `unzip`, `verify`, then `extract`.
 `native/` contains genuine, separately tested WebAssembly runtime components
 and integration work. No ROM, BIOS, game assets, saves, generated game C or
 compiled game is included.
