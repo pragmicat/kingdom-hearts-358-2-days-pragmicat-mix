@@ -7,7 +7,7 @@ runtime = LuaRuntime(unpack_returned_tuples=True)
 runtime.globals().SOURCE = (ROOT / 'practice/scripts/main.lua').read_text(encoding='utf-8')
 runtime.execute(r'''
 local function boot()
-  local c = { live = {}, made = {}, options = {}, reads = {}, holds = false, held_defeat = false,
+  local c = { live = {}, made = {}, positions = {}, options = {}, reads = {}, holds = false, held_defeat = false,
               hp = 100, kind = 0, ready = true, actor = true, loaded = {}, notices = 0, heals = 0, messages = {} }
   local handlers, next_id = {}, 0
   local addresses = { [0x0204c242] = 20000, [0x0204c240] = 0, [0x0204c228] = 0,
@@ -24,19 +24,21 @@ local function boot()
     mod = { on=function(name,f) handlers[name]=f end,
             option=function(o) o.value=o.default; c.options[o.key]=o; return o end,
             notice=function(message) c.notices=c.notices+1; c.last_notice=message; c.messages[#c.messages+1]=message end },
-    player = { max_hp=100, position=function() if c.actor then return 0,.049,0 end end,
+    player = { max_hp=100, position=function() if c.actor then return c.x or 0,c.y or .049,c.z or 0 end end,
       set_hp=function(hp) if c.no_gauge then return nil,'not now' end; c.hp=hp; c.heals=c.heals+1; return true end,
       set_position=function(x,y,z) assert(x==0 and y==.049 and z==0); c.recentred=true; return not c.no_place end,
       take_defeat=function(on) c.held_defeat=on; return true end },
     enemies = { hold_mission=function(on) c.holds=on; return true end,
       kinds=function() local t={}; for _,id in ipairs({0,1,4,41}) do t[#t+1]={kind=id,ready=c.ready and c.not_ready~=id} end; return t end,
       list=function() local t={}; for i,v in ipairs(c.live) do t[i]=v end; return t end,
+      info=function(handle) return c.positions[handle] end,
       remove=function(ids) for _,id in ipairs(ids) do for i=#c.live,1,-1 do if c.live[i]==id then table.remove(c.live,i) end end end; return true end,
       make=function(spec)
         c.made[#c.made+1]=spec
         if c.reject == spec.kind then return nil,'no room' end
         assert(spec.count==1 and spec.hp>0 and spec.strength>0 and spec.at[2]==.049)
-        next_id=next_id+1; c.live[#c.live+1]=next_id; assert(#c.live<=3); return {next_id}
+        next_id=next_id+1; c.live[#c.live+1]=next_id; assert(#c.live<=3)
+        c.positions[next_id]={x=spec.at[1],z=spec.at[3]}; return {next_id}
       end },
   }, {__index=_G})
   assert(load(SOURCE,'practice','t',env))()
@@ -398,6 +400,25 @@ test('endless waves cycle all native groups and continue past an entire rotation
   assert(saw[0] and saw[1] and saw[41] and largest==3 and c.holds and c.held_defeat)
   c.options.status.on_change(); assert(c.last_notice:find('Endless wave 8.',1,true))
   assert(not c.last_notice:find('Restart encounter',1,true)) -- manual-after-clear is a drill-only choice
+end)
+test('endless arrivals leave room for Roxas and moving survivors on authored pads',function()
+  local c=boot(); c.choose(5); c.step(110)
+  local function at(spec,x,z) return spec.at[1]==x and spec.at[3]==z end
+  assert(at(c.made[1],-2,-3) and at(c.made[2],2,-3) and at(c.made[3],0,-5))
+  local survivor=c.live[2]
+  c.live={survivor}; c.positions[survivor]={x=-2,z=-3}
+  c.x,c.y,c.z=0,5,-5 -- still avoid the occupied floor during an aerial combo
+  c.step(40)
+  assert(c.live[1]==survivor and c.made[4].kind==4 and at(c.made[4],2,-3))
+  c.step(35)
+  assert(c.made[5].kind==0 and at(c.made[5],0,-4))
+  c.clear(); c.step(35); c.clear()
+  c.x,c.z=-2,-3
+  local before=c.notices; c.step(1)
+  assert(c.notices==before+1 and c.last_notice=='Wave 1 clear! Wave 2: Aerial encounter.' and #c.live==0)
+  c.step(90,true); c.step(40); assert(c.notices==before+1)
+  -- Next aerial wave starts around the occupied pad; both arrivals need their own space.
+  assert(#c.live==2 and c.made[7].kind==1 and at(c.made[7],2,-3) and at(c.made[8],0,-5))
 end)
 test('endless durability stays per wave and HP recovery waits for wave boundaries',function()
   for recovery=1,2 do

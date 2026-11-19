@@ -23,8 +23,23 @@
 #include <cstring>
 #include <cmath>
 #include <vector>
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+#endif
 
 namespace {
+#ifdef __EMSCRIPTEN__
+EM_JS(unsigned, browser_attack_pad, (unsigned buttons), {
+    return typeof Module["onDaysAttackPad"] === "function" ? Module["onDaysAttackPad"](buttons) : 0;
+});
+EM_JS(void, browser_impact, (unsigned pad, int ending), {
+    if (typeof Module["onDaysCombatImpact"] === "function") Module["onDaysCombatImpact"](pad, ending);
+});
+#else
+unsigned browser_attack_pad(unsigned) { return 0; }
+void browser_impact(unsigned, int) {}
+#endif
+
 constexpr unsigned kTableOffset = 0x910, kTableSize = 0x480;
 // One verified wp.b row for each of the eighteen ci.b combo graphs.
 constexpr int kWeaponRows[] = {0,1,3,23,14,16,19,18,25,31,33,35,37,40,5,39,46,47};
@@ -39,6 +54,7 @@ unsigned menu_depth = 0;
 int buffer_ticks = 12, speed_fx = 5120, move_fx = 4710, turn_fx = 5325, style = 0;
 int technique_cone_degrees = 45;
 bool defensive_cancels = true;
+bool browser_hit_feedback = true;
 bool repertoire_debug = false;
 bool drive_enabled = true, drive_meter = true;
 int signature_damage_fx = 4096;
@@ -117,6 +133,8 @@ struct Player {
     rxroutes::Direction direction = rxroutes::Direction::Neutral;
     rxroutes::Direction committed_direction = rxroutes::Direction::Neutral;
     TargetIntent queued_target{}, committed_target{};
+    // Keep the device with the button press while native animation catches up.
+    unsigned queued_pad = 0, committed_pad = 0, active_pad = 0;
     rxroutes::Role role = rxroutes::Role::Pressure;
     unsigned queue_until = 0;
     unsigned light_cursor[2]{}, tech_cursor[2]{};
@@ -173,9 +191,15 @@ bool controllable(KhRef actor) { return !paused && control_context_live(actor); 
 bool queue_live() {
     return player.queued != 0 && static_cast<int>(player.queue_until - input->frame()) >= 0;
 }
+void clear_buffered_attack() {
+    player.queued = 0;
+    player.queued_target = {};
+    player.queued_pad = 0;
+}
 void clear_queue() {
-    player.queued = player.committed = 0;
-    player.queued_target = player.committed_target = {};
+    clear_buffered_attack();
+    player.committed = 0;
+    player.committed_target = {};
 }
 int requested_action() { return player.committed ? player.committed : queue_live() ? player.queued : 0; }
 rxroutes::Direction requested_direction() {
@@ -351,21 +375,23 @@ void teardown(KhRef table) {
 }
 
 struct Choice { int bank = -1; const Move* move = nullptr; };
-void apply_intended_target() {
+KhActor apply_intended_target() {
     const auto& intent = player.committed ? player.committed_target : player.queued_target;
-    if (!intent.handle) return; // Uncaptured inputs retain native targeting.
+    if (!intent.handle) return 0; // Uncaptured inputs retain native targeting.
     // Clear cached native actor/part addresses even when the captured handle
     // has retired. An invalid buffered target must not leave a stale pick live.
     std::memset(bytes(player.actor) + 0x4f0, 0, 0x18);
-    if (!actors->kind || !actors->ref || actors->kind(intent.handle) != KH_ACTOR_ENEMY) return;
+    if (!actors->kind || !actors->ref || actors->kind(intent.handle) != KH_ACTOR_ENEMY) return 0;
     const KhRef expected = actors->ref(intent.handle);
-    if (!expected || !bytes(expected)) return;
+    if (!expected || !bytes(expected)) return 0;
     // Store identity, not a borrowed collision-part pointer. Resolve the part
     // again through the game's live list and verify the generation-safe actor.
     std::memcpy(bytes(player.actor) + 0x4f0, intent.identity.data(), intent.identity.size());
     resolve_target_pick(player.actor);
-    if (read<unsigned char>(player.actor, 0x4f0) != 1 || read<KhRef>(player.actor, 0x4fc) != expected)
-        std::memset(bytes(player.actor) + 0x4f0, 0, 0x18);
+    if (read<unsigned char>(player.actor, 0x4f0) == 1 && read<KhRef>(player.actor, 0x4fc) == expected)
+        return intent.handle;
+    std::memset(bytes(player.actor) + 0x4f0, 0, 0x18);
+    return 0;
 }
 Choice choose(int group, bool technique) {
     const bool finisher = player.depth >= 4;
@@ -409,7 +435,7 @@ bool select_move(KhRef table, int group, bool technique) {
     if (player.banks.empty()) return false;
     const Choice choice = choose(group, technique);
     if (!choice.move) return false;
-    apply_intended_target();
+    const KhActor intended_target = apply_intended_target();
     const auto action = requested_action() ? static_cast<rxroutes::Action>(requested_action()) :
         technique ? rxroutes::Action::Technique : rxroutes::Action::Light;
     const auto route = rxroutes::choose({group, player.kind, player.light_cursor[group], player.active_move},
@@ -445,9 +471,14 @@ bool select_move(KhRef table, int group, bool technique) {
     if (action == rxroutes::Action::Light) ++player.light_cursor[group];
     if (technique) ++player.techniques;
     ++player.depth;
-    clear_queue();
+    player.active_pad = player.committed ? player.committed_pad : queue_live() ? player.queued_pad : 0;
+    // The native window already took ownership of a committed press. A tap
+    // sampled since then belongs to the incoming swing, with its original expiry.
+    if (!player.committed || !queue_live()) clear_buffered_attack();
+    player.committed = 0;
+    player.committed_target = {};
     player.hit_animation_frame = -1;
-    rxmotion::attack_started(player.actor, choice.move->id, group, style == 0 && route.launcher);
+    rxmotion::attack_started(player.actor, choice.move->id, group, style == 0 && route.launcher, intended_target);
     rxrules::attack_started(player.actor, rxmotion::snapshot().attack_serial,
         route.launcher ? rxrules::Reaction::Launcher : route.role == rxroutes::Role::Carry ?
         rxrules::Reaction::Carry : rxrules::Reaction::Native);
@@ -488,6 +519,7 @@ void walk(KhRef table, int reverse, int group) {
         player.committed = requested;
         player.committed_direction = direction;
         player.committed_target = target;
+        player.committed_pad = player.active_pad;
     }
 }
 void next(KhRef table, bool branch) {
@@ -572,6 +604,7 @@ void sample_input(KhRef actor) {
     // cannot extend a timed form indefinitely with a never-ending air string.
     if (form_transition_pending()) { clear_queue(); player.jump_queued = false; return; }
     if (pressed & (KH_BUTTON_A | KH_BUTTON_X)) {
+        player.queued_pad = browser_hit_feedback ? browser_attack_pad(pressed) : 0;
         player.direction = input_direction(actor);
         player.queued_target = {};
         if (read<unsigned char>(actor, 0x4f0) == 1 && actors->of && actors->kind) {
@@ -592,8 +625,7 @@ void sample_input(KhRef actor) {
     } else if (!queue_live()) {
         // Only an unaccepted button press expires. Native phase acceptance is a
         // commitment and can wait longer than the raw early-input buffer.
-        player.queued = 0;
-        player.queued_target = {};
+        clear_buffered_attack();
     }
 }
 
@@ -648,8 +680,7 @@ void mobility_consumed(unsigned consumed_until, unsigned consumed_intent) {
     // older accepted attack which the deliberate movement replaced.
     // Compare with the consumed request, not a newer Jump received in recovery.
     if (player.queued && (!queue_live() || static_cast<int>(player.queue_until - consumed_until) < 0)) {
-        player.queued = 0;
-        player.queued_target = {};
+        clear_buffered_attack();
     }
     if (player.jump_intent == consumed_intent) player.jump_queued = false;
     player.defense_queued = false;
@@ -661,8 +692,7 @@ void defense_consumed() {
     player.committed_target = {};
     player.pending_finisher = 0;
     if (player.queued && (!queue_live() || static_cast<int>(player.queue_until - player.defense_until) <= 0)) {
-        player.queued = 0;
-        player.queued_target = {};
+        clear_buffered_attack();
     }
     if (player.jump_queued && (static_cast<int>(player.jump_until - player.defense_until) <= 0 ||
         static_cast<int>(player.jump_until - input->frame()) < 0)) player.jump_queued = false;
@@ -834,6 +864,8 @@ int step(KhRef actor) {
                 player.committed = player.queued;
                 player.committed_direction = player.direction;
                 player.committed_target = player.queued_target;
+                player.committed_pad = player.queued_pad;
+                clear_buffered_attack();
             }
             write<int>(table, 0x47c, 1);
             write<std::uint16_t>(actor, 0x1c, 1);
@@ -868,6 +900,8 @@ void accepted_hit(KhRef attacker, KhActor target, unsigned serial, unsigned tick
     if (attacker == player.actor && serial != player.hit_serial) {
         player.hit_serial = serial;
         player.hit_animation_frame = read<int>(attacker, 0x7b0);
+        if (browser_hit_feedback && player.active_pad)
+            browser_impact(player.active_pad, !repertoire_debug && player.active_finisher);
     }
     rxdrive::on_hit(attacker, target, serial, tick);
 }
@@ -942,11 +976,13 @@ void frame_event(const KhEvent* event, void*) {
     } else input->hide(host->plugin, 0);
 }
 void menu_open(const KhEvent*, void*) {
+    browser_impact(0, 0);
     ++menu_depth; paused = true; discard_intentions(player.actor);
     rxlimit::set_suspended(true); rxanim::reset(); input->hide(host->plugin, 0);
 }
 void menu_close(const KhEvent*, void*) { if (menu_depth) --menu_depth; paused = menu_depth != 0; }
 void scene_event(const KhEvent*, void*) {
+    browser_impact(0, 0);
     practice_meter_primed = false;
     clear_queue(); player.defense_queued = false; player.pending_finisher = 0;
     player.jump_queued = player.resume_route = false; menu_depth = 0;
@@ -980,6 +1016,7 @@ KhResult start(const KhHost* given) {
         events->size < sizeof(KhEvents) || !engine->pointer || !engine->routine || !engine->datum ||
         !engine->module_loaded || !engine->replace || !actors->local_seat || !actors->player || !actors->ref || !input->hide || !input->frame ||
         !input->pressed || !input->held || !actors->position || !net->in_room || !events->subscribe) return KH_UNSUPPORTED;
+    browser_hit_feedback = true;
     if (parameters && parameters->size >= sizeof(KhParameters) && parameters->integer && parameters->number) {
         buffer_ticks = std::clamp(parameters->integer(host->plugin, "buffer_ms", 200), 50, 400) * 60 / 1000;
         const int direction_style = std::clamp(parameters->integer(host->plugin, "technique_direction_style", 1), 0, 2);
@@ -987,6 +1024,7 @@ KhResult start(const KhHost* given) {
         speed_fx = static_cast<int>(std::clamp(parameters->number(host->plugin, "attack_speed", 1.25), 1.0, 1.6) * 4096);
         move_fx = static_cast<int>(std::clamp(parameters->number(host->plugin, "movement_speed", 1.15), 1.0, 1.4) * 4096);
         turn_fx = static_cast<int>(std::clamp(parameters->number(host->plugin, "turn_speed", 1.3), 1.0, 1.6) * 4096);
+        browser_hit_feedback = parameters->integer(host->plugin, "browser_hit_feedback", 1) != 0;
         defensive_cancels = parameters->integer(host->plugin, "defensive_cancels", 1) != 0;
         repertoire_debug = parameters->integer(host->plugin, "repertoire_debug", 0) != 0;
         drive_enabled = parameters->integer(host->plugin, "drive_enabled", 1) != 0;
@@ -999,6 +1037,7 @@ KhResult start(const KhHost* given) {
         drive_settings.duration_ticks = static_cast<unsigned>(std::clamp(parameters->integer(host->plugin, "drive_seconds", 15), 8, 30) * 60);
         signature_damage_fx = static_cast<int>(std::clamp(parameters->number(host->plugin, "signature_damage", 1.0), .25, 1.0) * 4096);
     }
+    if (!browser_hit_feedback) browser_impact(0, 0);
     scene_ctl = engine->datum("gSceneCtl");
     cinematic_flag = engine->datum("data_0204be04");
     boot_flags = engine->datum("data_0204c240");
@@ -1045,6 +1084,7 @@ KhResult start(const KhHost* given) {
     return KH_OK;
 }
 void stop() {
+    browser_impact(0, 0);
     rxpractice::stop();
     practice_meter_primed = false;
     rxhud::stop();

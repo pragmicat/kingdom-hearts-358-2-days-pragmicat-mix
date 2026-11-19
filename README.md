@@ -63,11 +63,11 @@ First entry, Restart, Next mixed group and defeat recovery still restore health.
 These training settings affect the separate practice arena.
 
 Endless Heartless refills individual defeated targets while survivors remain,
-then rotates groups without a final wave. Native notices and Encounter status
-track the wave and total cleared. At most three enemies are active; replacements
-do not heal the player. Restart begins a fresh run. See the
-[Endless practice guide](practice/ENDLESS.md). This is native PC practice source,
-not a mode in the original-game browser player.
+then rotates groups without a final wave. A clear announces the next group before
+it arrives. Reinforcements use the arena's existing spawn pads and look for open
+space around Roxas and surviving enemies. Encounter status tracks the wave and
+total cleared. Restart begins a fresh run. The PC and browser recompilation use
+the same [Endless practice script](practice/ENDLESS.md).
 
 Light continues your normal ground or air chain. Technique changes with direction:
 
@@ -81,7 +81,11 @@ Light continues your normal ground or air chain. Technique changes with directio
 
 Jump and defense can be tapped slightly early and wait for an eligible exit;
 missed attacks retain their recovery. A clean hit opens earlier defensive exits.
-One dodge or guard can retain your combo route for a brief follow-up.
+One dodge or guard can retain your combo route for a brief follow-up. Once a
+Light is accepted, you can tap the next Technique during the swing transition.
+It keeps the direction and target from that press until the normal buffer expires.
+When a launcher or an aerial sweep hits several Heartless, pursuit and Enemy Step
+prefer the one you aimed at and damaged.
 
 Magic uses the game's normal spell selection. After the melee contacts finish,
 an eligible native spell request can flow out of the attack. Successful distinct
@@ -89,7 +93,11 @@ melee actions gradually restore charges of equipped offensive spells; Cure is
 excluded. Drive shows charge as a percentage, then **READY** when available,
 **QUEUED** while waiting to transform, and time remaining once active.
 Newly gained Drive charge receives a brief pale accent on that part of the bar,
-giving a small combat-feedback cue without flashing the full display.
+giving a small combat-feedback cue without flashing the full display. Gold
+right-pointing marks mean your Drive request is queued. Silver left-pointing
+marks mean dual wield is ending. On supported browser gamepads, a confirmed
+melee hit gives one short vibration per swing. Ending attacks give a stronger
+pulse. **Gamepad hit vibration (browser)** turns this feedback on or off.
 
 ### Build
 

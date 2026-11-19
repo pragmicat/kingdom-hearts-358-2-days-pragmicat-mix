@@ -5,7 +5,7 @@
 #include <vector>
 
 namespace rxhud {
-enum class Mode { Hidden, Charging, Ready, Active };
+enum class Mode { Hidden, Charging, Ready, ActivationQueued, Active, RestorationQueued };
 struct Rect { int x = 0, y = 0, width = 0, height = 0; };
 struct Layout {
     Rect panel, label, status, track; // panel is client-relative; others are local

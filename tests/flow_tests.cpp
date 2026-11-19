@@ -53,6 +53,7 @@ KhParameters parameters{};
 bool have_parameters;
 int configured_charge_hits;
 int configured_direction_style;
+bool configured_hit_feedback;
 
 void* ptr(KhRef ref) {
     auto it=live.upper_bound(ref);
@@ -208,6 +209,7 @@ KhResult replace(const char* name,void* replacement,void** previous) {
 }
 KhSubscription subscribe(KhPlugin*,const char*,KhEventFunction,void*) {static unsigned count=1;return count++;}
 int32_t parameter_integer(KhPlugin*,const char* name,int32_t fallback) {
+    if(std::strcmp(name,"browser_hit_feedback")==0)return configured_hit_feedback;
     if(std::strcmp(name,"technique_direction_style")==0)return configured_direction_style;
     return std::strcmp(name,"drive_charge_hits")==0?configured_charge_hits:fallback;
 }
@@ -230,7 +232,7 @@ void reset() {
     paused=false;menu_depth=0;building=false;stopping=false;buffer_ticks=12;speed_fx=5120;style=0;last_input_frame=~0u;
     repertoire_debug=false;defensive_cancels=true;move_fx=4710;turn_fx=5325;
     drive_enabled=drive_meter=true;signature_damage_fx=4096;drive_settings={1000,25,2,900};
-    have_parameters=false;configured_charge_hits=40;configured_direction_style=1;technique_cone_degrees=45;
+    configured_hit_feedback=true;have_parameters=false;configured_charge_hits=40;configured_direction_style=1;technique_cone_degrees=45;
     parameters={sizeof(KhParameters),&parameter_integer,&parameter_number,nullptr};
     live.clear();allocation_heaps.clear();parts.clear();snapshots.clear();torn.clear();logs.clear();routines.clear();cursor=0x1000;
     loaded=true;blocked=room=seat=0;pad_frame=100;pad_pressed=pad_held=hidden=replace_calls=find_calls=speed_calls=0;
@@ -687,6 +689,47 @@ void accepted_intent_survives_buffer_expiry_and_unaccepted_input_does_not_start_
     player.committed=2;KhEvent menu{};menu_open(&menu,nullptr);CHECK(player.committed==0);menu_close(&menu,nullptr);
     close();tear_original(original_table);
 }
+void next_swing_keeps_a_fresh_tap_between_acceptance_and_transition() {
+    for (int group : {0, 1}) for (bool expires : {false, true}) {
+        reset(); launch(); build_player();
+        CHECK(select_move(original_table, group, false));
+        const KhRef opener = active_record();
+        put(opener, 0x10, 10*4096); put(opener, 0x14, 20*4096);
+        put(actor, 0x7b0, 10*4096); pad_pressed = KH_BUTTON_A;
+        CHECK(step(actor) == 0);
+        CHECK(player.committed == static_cast<int>(rxroutes::Action::Light));
+        ++pad_frame; input_heading = 0; pad_held = pad_pressed = KH_BUTTON_X;
+        put(actor, 0x4f0, static_cast<unsigned char>(1));
+        put(actor, 0x4f1, static_cast<unsigned char>(7));
+        put(actor, 0x4fc, actor + 0x3800);
+        KhEvent frame{}; frame_event(&frame, nullptr);
+        const unsigned deadline = player.queue_until;
+        CHECK(player.queued_target.handle == 9001);
+        put(actor, 0x4fc, actor + 0x3900); input_heading = 32768;
+        pad_held = pad_pressed = 0; ++pad_frame;
+        during_step = [] { next_a(original_table); };
+        CHECK(step(actor) == 0); during_step = {};
+        CHECK(player.active_move == (group ? 11 : 1060));
+        CHECK(requested_action() == static_cast<int>(rxroutes::Action::Technique));
+        CHECK(!player.committed && player.queue_until == deadline);
+        const KhRef incoming = active_record();
+        put(incoming, 0x10, 3*4096); put(incoming, 0x14, 6*4096);
+        put(actor, 0x7b0, 2*4096); ++pad_frame;
+        CHECK(step(actor) == 0); CHECK(!player.committed);
+        put(actor, 0x7b0, 3*4096); pad_frame = deadline + (expires ? 1 : 0);
+        CHECK(step(actor) == 0);
+        if (expires) {
+            CHECK(!requested_action());
+        } else {
+            CHECK(player.committed == static_cast<int>(rxroutes::Action::Technique));
+            CHECK(player.committed_direction == rxroutes::Direction::Toward);
+            next_a(original_table); CHECK(player.active_move == (group ? 4101 : 1));
+            CHECK(flow_stub::motion.intended_target == 9001);
+            CHECK(!requested_action());
+        }
+        close(); tear_original(original_table);
+    }
+}
 void forced_control_loss_discards_old_intentions(int gate) {
     // Every entry point must invalidate the accepted command, even when the
     // native actor stops calling the other two callbacks during a script.
@@ -1098,10 +1141,12 @@ void committed_target_is_resolved_fresh_and_stale_generations_are_not_restored()
     put(actor,0x4fc,actor+0x3900);put(actor,0x500,0xf00dbeefu); // native auto-target changed meanwhile
     next_a(original_table);CHECK(resolve_calls==1);CHECK(get<KhRef>(actor,0x4fc)==actor+0x3800);
     CHECK(get<KhRef>(actor,0x500)==actor+0x3a00);CHECK(player.committed_target.handle==0);
+    CHECK(flow_stub::motion.intended_target==9001);
     ++pad_frame;queue_target();target_handle_live=false;
     put(actor,0x4f0,static_cast<unsigned char>(0));CHECK(select_move(original_table,0,true));CHECK(resolve_calls==1);
     target_handle_live=true;++pad_frame;queue_target();resolve_wrong_generation=true;
     CHECK(select_move(original_table,0,true));CHECK(resolve_calls==2);
+    CHECK(flow_stub::motion.intended_target==0);
     for(unsigned x=0;x<0x18;++x)CHECK(get<unsigned char>(actor,0x4f0+x)==0);
     close();tear_original(original_table);
 }
@@ -1221,6 +1266,46 @@ void drive_charge_length_matches_each_selected_connection_count() {
         close();
     }
 }
+#ifdef __EMSCRIPTEN__
+void browser_impact_follows_each_swings_own_controller_once() {
+    EM_ASM({
+        Module["impactEvents"] = [];
+        Module["onDaysAttackPad"] = () => Module["testAttackPad"];
+        Module["onDaysCombatImpact"] = (pad, ending) => {
+            if (pad) Module["impactEvents"].push(pad * 10 + ending);
+        };
+    });
+    for (bool enabled : {true, false}) {
+        reset(); have_parameters = true; configured_hit_feedback = enabled;
+        launch(); build_player();
+        EM_ASM({ Module["impactEvents"].length = 0; Module["testAttackPad"] = 6; });
+        pad_pressed = pad_held = KH_BUTTON_A; sample_input(actor); walk(original_table, 0, 1);
+        CHECK(EM_ASM_INT({ return Module["impactEvents"].length; }) == 0);
+        // Accept a descending Technique, then tap Light on keyboard before its
+        // native transition. Each attack keeps the controller that initiated it.
+        const KhRef record = active_record(); put(record, 0x10, 0); put(record, 0x14, -4096);
+        ++pad_frame; pad_pressed = pad_held = KH_BUTTON_X; input_heading = 32768;
+        EM_ASM({ Module["testAttackPad"] = 8; });
+        step(actor);
+        ++pad_frame; pad_pressed = pad_held = KH_BUTTON_A;
+        EM_ASM({ Module["testAttackPad"] = 0; });
+        sample_input(actor);
+        flow_stub::confirm(actor, player.active_move, pad_frame);
+        flow_stub::confirm(actor, player.active_move, pad_frame, 9002);
+        CHECK(EM_ASM_INT({ return Module["impactEvents"].length; }) == (enabled ? 1 : 0));
+        next_a(original_table); CHECK(player.active_finisher);
+        flow_stub::confirm(actor, player.active_move, pad_frame);
+        flow_stub::confirm(actor, player.active_move, pad_frame, 9002);
+        walk(original_table, 0, 1);
+        flow_stub::confirm(actor, player.active_move, pad_frame);
+        CHECK(EM_ASM_INT({ return Module["impactEvents"].join("/") === "60/81"; }) == enabled);
+        if (!enabled) CHECK(EM_ASM_INT({ return Module["impactEvents"].length; }) == 0);
+        close(); tear_original(original_table);
+    }
+    EM_ASM({ delete Module["onDaysAttackPad"]; delete Module["onDaysCombatImpact"];
+             delete Module["impactEvents"]; delete Module["testAttackPad"]; });
+}
+#endif
 void initial_signature_keeps_its_accepted_intent_until_the_native_window() {
     reset();launch();build_player();
     offer(rxroutes::Action::Flurry,rxroutes::Direction::Neutral);
@@ -1276,6 +1361,7 @@ int main() {
       {"Drive expiry blocks input and frame replacement obeys safe state",test::drive_expiry_suppresses_new_attacks_and_frame_replacement_is_gated},
       {"native packet policy, hit listeners and form callbacks are connected",test::hit_pipeline_and_form_callbacks_are_wired_once},
       {"committed native-window intent survives expiry; unaccepted input expires",test::accepted_intent_survives_buffer_expiry_and_unaccepted_input_does_not_start_a_move},
+      {"a fresh tap during a committed swing survives into the next native window",test::next_swing_keeps_a_fresh_tap_between_acceptance_and_transition},
       {"cinematic control loss discards accepted and queued combat intentions",[]{test::forced_control_loss_discards_old_intentions(0);}},
       {"blocked input discards accepted and queued combat intentions",[]{test::forced_control_loss_discards_old_intentions(1);}},
       {"hidden actor discards accepted and queued combat intentions",[]{test::forced_control_loss_discards_old_intentions(2);}},
@@ -1315,6 +1401,9 @@ int main() {
       {"queued form uses the signature's authored exit",test::pending_form_can_leave_a_signature_at_its_authored_exit},
       {"practice primes Drive once per scene without changing campaign or paused input",test::practice_gauge_is_scoped_and_once_per_scene},
       {"Drive charge setting matches every supported connection count",test::drive_charge_length_matches_each_selected_connection_count},
+#ifdef __EMSCRIPTEN__
+      {"browser impact follows each swing's own controller once",test::browser_impact_follows_each_swings_own_controller_once},
+#endif
       {"initial signature chord stays committed until its authored native transition",test::initial_signature_keeps_its_accepted_intent_until_the_native_window}};
     unsigned failed=0;
     for(const auto& item:cases)try {std::cout<<"RUN "<<item.first<<std::endl;item.second();std::cout<<"PASS "<<item.first<<std::endl;}

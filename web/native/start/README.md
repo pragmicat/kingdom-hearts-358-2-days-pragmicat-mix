@@ -39,7 +39,11 @@ remaining runtime sources, dependencies and browser platform services.
 The host requests original two-screen CPU composition and DS movies. Before
 calling Emscripten `module.callMain([])`, import game data, prepare the selected
 profile, and attach the renderer's `module.onDaysFrame` callback. The first
-frame callback confirms native picture output. The optional
+frame callback confirms native picture output. The
+`boot.mjs` adapter also drains the original script notice queue on each
+presented frame. Its two accessible lines sit beside the canvas in document
+order. A five-second gameplay cue and the latest localized mod warning can
+be read together. Both disappear when the session exits. The optional
 `module.onDaysRuntimeProblem(where, problem)` callback reports missing game
 data or a missing Canvas sink. `module.onDaysRuntimeClosed()` reports a native
 host close. The game has an asynchronous runtime lifetime, including a normal

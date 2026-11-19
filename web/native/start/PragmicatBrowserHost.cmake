@@ -65,6 +65,7 @@ function(pragmicat_add_browser_host target upstream generated)
         "${native}/host/instance_emscripten.c"
         "${native}/host/audio_emscripten.c"
         "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/host_display_emscripten.c"
+        "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/mod_notices_emscripten.c"
         "${native}/renderer/frame_bridge.c"
         "${port}/gpu/gpu2d.c"
         "${port}/gpu/gpu3d.c"

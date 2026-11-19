@@ -3,6 +3,7 @@ import { attachDaysAudio } from './host/browser-audio.mjs';
 import { attachDaysInput } from './host/browser-input.mjs';
 import { prepareBrowserProfile } from './mod/profile.mjs';
 import { attachDaysCanvas } from './renderer/canvas-presenter.mjs';
+import { attachDaysNotices } from './start/browser-notices.mjs';
 
 // Prepare a cartridge before presenting the Play button. Launch only with a
 // factory from the built Days recompilation and a fresh user gesture for sound.
@@ -37,7 +38,8 @@ export async function prepareDaysGame(createRuntime, file, canvas, {
             }
         },
     });
-    if (!module.FS || typeof module.callMain !== 'function' || !module.HEAPU8) {
+    if (!module.FS || typeof module.callMain !== 'function' || !module.HEAPU8 ||
+        typeof module._days_web_drain_mod_notices !== 'function') {
         throw new Error('The complete Days browser runtime is required.');
     }
     await importRomToFileSystem(inspection, module.FS, { signal, onProgress });
@@ -59,6 +61,8 @@ export async function prepareDaysGame(createRuntime, file, canvas, {
             };
             try {
                 module.onDaysFrame = () => {
+                    if (phase === 'ended') return;
+                    module._days_web_drain_mod_notices();
                     if (phase !== 'starting') return;
                     phase = 'playing';
                     onFirstFrame();
@@ -66,6 +70,7 @@ export async function prepareDaysGame(createRuntime, file, canvas, {
                 module.onDaysRuntimeProblem = (where, problem) => {
                     fail(new Error(problem || `Days could not load game files in ${where}.`));
                 };
+                adapters.push(attachDaysNotices(module, canvas));
                 adapters.push(attachDaysCanvas(module, canvas));
                 const input = attachDaysInput(module, canvas);
                 adapters.push(input);

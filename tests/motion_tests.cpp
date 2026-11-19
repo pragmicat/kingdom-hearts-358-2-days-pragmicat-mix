@@ -464,6 +464,43 @@ void crowd_contacts_do_not_refresh_another_targets_mobility_window() {
         CHECK(chase ? rxmotion::request_chase(actor) : rxmotion::request_enemy_step(actor));
     }
 }
+void aimed_crowd_hits_follow_the_attacks_resolved_target() {
+    for (bool preferred_first : {false, true}) {
+        reset(); attach(); rxmotion::observe_hit(&observe);
+        target2_pos[0] = 0; target2_pos[2] = 5;
+        rxmotion::attack_started(actor, 13080, 0, true, target2_id);
+        hit(actor, preferred_first ? enemy2 : enemy);
+        hit(actor, preferred_first ? enemy : enemy2);
+        CHECK(rxmotion::snapshot().target == target2_id && notifications[0] == 2);
+        target_pos[1] += 2; CHECK(!rxmotion::snapshot().launcher_confirmed);
+        target2_pos[1] += 2; CHECK(rxmotion::request_chase(actor)); CHECK(rxmotion::step(actor));
+        jump(); CHECK(get<int>(actor, 0x498) == 0 && get<int>(actor, 0x4a0) > 0);
+    }
+    reset(); attach();
+    target_pos[0] = target2_pos[0] = 1; target2_pos[2] = 0;
+    put(enemy, 0x17a, static_cast<unsigned char>(1)); // sweep also touches a grounded bystander
+    rxmotion::attack_started(actor, 3, 1, false, target2_id);
+    hit(); hit(actor, enemy2);
+    CHECK(rxmotion::request_enemy_step(actor)); CHECK(rxmotion::step(actor));
+    CHECK(get<int>(actor, 0x58) == 2048);
+}
+void aimed_crowd_hits_keep_a_viable_fallback_and_accepted_jump() {
+    for (bool knockout : {false, true}) {
+        reset(); attach(); rxmotion::attack_started(actor, 13080, 0, true, target2_id);
+        hit();
+        if (knockout) native_damage = 100;
+        else native_outcome = 2; // guard
+        hit(actor, enemy2);
+        CHECK(rxmotion::snapshot().target == target_id);
+        target_pos[1] += 2; CHECK(rxmotion::request_chase(actor)); CHECK(rxmotion::step(actor));
+    }
+    reset(); attach(); rxmotion::attack_started(actor, 13080, 0, true, target2_id);
+    hit(); CHECK(rxmotion::request_chase(actor));
+    hit(actor, enemy2); CHECK(rxmotion::snapshot().target == target_id);
+    target_pos[1] += 2; CHECK(rxmotion::step(actor));
+    retired_enemy = true; hit(actor, enemy2);
+    CHECK(jump() == 0); CHECK(!rxmotion::snapshot().chasing);
+}
 void crowd_contacts_cannot_confirm_a_late_rise_for_an_old_launcher_target() {
     reset(); attach(); rxmotion::attack_started(actor, 11080, 0, true); hit();
     frame_number += 37; target_pos[1] = 2; hit(actor, enemy2);
@@ -554,6 +591,8 @@ int main() {
         {"accepted Enemy Step survives recovery, expires and consumes once", motion_test::accepted_enemy_step_survives_recovery_until_its_fixed_deadline},
         {"repeated motion requests cannot renew accepted deadlines", motion_test::repeated_motion_requests_do_not_extend_accepted_deadlines},
         {"crowd contacts cannot refresh another target's mobility window", motion_test::crowd_contacts_do_not_refresh_another_targets_mobility_window},
+        {"aimed crowd pursuit and Enemy Step follow the resolved attack target", motion_test::aimed_crowd_hits_follow_the_attacks_resolved_target},
+        {"guarded or defeated picks and late hits preserve the accepted mobility target", motion_test::aimed_crowd_hits_keep_a_viable_fallback_and_accepted_jump},
         {"crowd contacts cannot confirm a late rise for an old launcher target", motion_test::crowd_contacts_cannot_confirm_a_late_rise_for_an_old_launcher_target},
         {"accepted crowd mobility keeps original target and deadline", motion_test::accepted_crowd_mobility_keeps_its_original_target_and_deadline},
         {"accepted Enemy Step rechecks live execution conditions", motion_test::accepted_enemy_step_rechecks_live_execution_conditions},

@@ -28,9 +28,9 @@ settings or movie holds. These callbacks run on one cooperative host thread.
 stylus events to the C bridge without packing a JavaScript copy of a native
 struct. It captures keyboard gameplay only while the canvas has focus, combines
 keyboard/gamepad buttons, handles disconnects and blur, and releases listeners,
-keys and RAF polling on disposal. Canvas coordinates assume the renderer's
-256×384 stacked pair of DS screens. These are initial bindings, not verified
-controller-feel tuning:
+keys and RAF polling on disposal. The lower 192 rows receive stylus input at
+any display size. The optional Drive gauge between screens has no touch
+targets. These are the initial bindings:
 
 | DS input | Keyboard |
 | --- | --- |

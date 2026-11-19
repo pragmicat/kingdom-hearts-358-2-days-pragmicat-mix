@@ -66,9 +66,10 @@ namespace rxmotion {
 bool attach(const KhEngine*, const KhActors*, const KhInput*, Permitted) { return true; }
 void detach() { flow_stub::motion = {}; }
 void bind(KhRef actor) { ++flow_stub::motion_binds; flow_stub::motion.actor = actor; }
-void attack_started(KhRef actor, int id, int group, bool launcher) {
+void attack_started(KhRef actor, int id, int group, bool launcher, KhActor intended_target) {
     ++flow_stub::motion_starts; flow_stub::motion = {};
     flow_stub::motion.actor = actor; flow_stub::motion.attack_id = id;
+    flow_stub::motion.intended_target = intended_target;
     flow_stub::motion.group = group; flow_stub::motion.launcher = launcher;
     flow_stub::motion.attack_serial = ++flow_stub::serial;
 }

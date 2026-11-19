@@ -8,6 +8,7 @@ local GROUPS = {
   { { 4, 0, -3, 8 } },
 }
 local GROUP_NAMES = { "Ground encounter", "Aerial encounter", "Armored target", "Single ground target" }
+local ENDLESS_PADS = { GROUPS[1][1], GROUPS[1][2], GROUPS[1][3], GROUPS[3][1] }
 local CONTROL_PAGES = {
   "1/4 ATTACKS: Attack=Light. X+direction=Technique; directions follow your target.",
   "2/4 FINISHERS: Hold Light, press Technique: Toward=Rush; Away=Burst; neutral/side=Flurry.",
@@ -191,7 +192,6 @@ local function reset_encounter()
   run.restore_hp = true
   if mode.value == 5 then
     run.cycle, run.wave, run.cleared = 1, 1, 0
-    run.endless_announced = nil
   end
   run.endless_spawned, run.endless_targets = 0, {}
   run.refill_ticks, run.endless_failures = 30, 0
@@ -199,14 +199,39 @@ local function reset_encounter()
   clear_encounter()
 end
 
-local function make_target(target, hp_scale)
-  return enemies.make{
-    kind = target[1], count = 1, at = { target[2], HOME[2], target[3] },
-    level = 0, hp = target[4] * hp_scale, strength = 0.6,
-  }
+local function endless_pad(preferred, nearby)
+  local function clearance(pad)
+    local nearest = math.huge
+    for _, actor in ipairs(nearby) do
+      local dx, dz = pad[2] - actor.x, pad[3] - actor.z
+      nearest = math.min(nearest, dx * dx + dz * dz)
+    end
+    return nearest
+  end
+  local best, distance = preferred, clearance(preferred)
+  -- Keep the authored lane whenever there are two floor units of space.
+  if distance >= 4 then return best end
+  for _, pad in ipairs(ENDLESS_PADS) do
+    local space = clearance(pad)
+    if space > distance then best, distance = pad, space end
+  end
+  return best
 end
 
-local function spawn()
+local function make_target(target, hp_scale, nearby)
+  local pad = nearby and endless_pad(target, nearby) or target
+  local handles = enemies.make{
+    kind = target[1], count = 1, at = { pad[2], HOME[2], pad[3] },
+    level = 0, hp = target[4] * hp_scale, strength = 0.6,
+  }
+  if nearby and handles and #handles > 0 then
+    -- The other arrivals in this batch have yet to move from their pads.
+    nearby[#nearby + 1] = { x = pad[2], z = pad[3] }
+  end
+  return handles
+end
+
+local function spawn(x, z)
   local ready = {}
   for _, entry in ipairs(enemies.kinds("all")) do ready[entry.kind] = entry.ready end
   local group = GROUPS[group_index()]
@@ -215,8 +240,9 @@ local function spawn()
     if not ready[target[1]] then return false end
   end
   local made = 0
+  local nearby = mode.value == 5 and { { x = x, z = z } } or nil
   for slot, target in ipairs(group) do
-    local handles = make_target(target, hp_scale)
+    local handles = make_target(target, hp_scale, nearby)
     if handles ~= nil then made = made + #handles end
     if mode.value == 5 and handles ~= nil then
       for _, handle in ipairs(handles) do run.endless_targets[handle] = slot end
@@ -233,7 +259,7 @@ local function spawn()
   return made > 0
 end
 
-local function step_endless()
+local function step_endless(x, z)
   local targets, live, occupied = enemies.list(), {}, {}
   for _, handle in ipairs(targets) do live[handle] = true end
   for handle, slot in pairs(run.endless_targets) do
@@ -247,7 +273,9 @@ local function step_endless()
   -- Each wave plays two sets of its native group. Individual losses refill
   -- while the other enemies remain alive; no survivor is removed or duplicated.
   if run.endless_spawned >= #group * 2 and #targets == 0 then
+    local finished = run.wave
     run.wave, run.cycle = run.wave + 1, run.cycle % 3 + 1
+    mod.notice("Wave " .. finished .. " clear! Wave " .. run.wave .. ": " .. GROUP_NAMES[run.cycle] .. ".")
     run.phase, run.ticks = "waiting", 30
     run.endless_spawned, run.endless_targets = 0, {}
     run.refill_ticks, run.endless_failures = 30, 0
@@ -264,7 +292,12 @@ local function step_endless()
     if not occupied[slot] and ready[target[1]] then
       -- Rotate after a refusal so an available slot still gets a turn.
       run.refill_slot = slot % #group + 1
-      local handles = make_target(target, run.hp_scale)
+      local nearby = { { x = x, z = z } }
+      for _, handle in ipairs(targets) do
+        local actor = enemies.info(handle)
+        if actor then nearby[#nearby + 1] = actor end
+      end
+      local handles = make_target(target, run.hp_scale, nearby)
       if handles ~= nil and #handles > 0 then
         for _, handle in ipairs(handles) do run.endless_targets[handle] = slot end
         run.endless_spawned = run.endless_spawned + #handles
@@ -301,10 +334,11 @@ mod.on("frame", function(e)
   if run == nil then arm() end
   if run == nil or e.paused or actor_kind() == nil then return end
   if not memory.loaded(2) or not memory.loaded(107) then return end
-  if player.position() == nil then return end
+  local x, _, z = player.position()
+  if x == nil then return end
   if reset_requested then reset_encounter() end
   if run.phase == "fighting" then
-    if mode.value == 5 then step_endless(); return end
+    if mode.value == 5 then step_endless(x, z); return end
     if #enemies.list() == 0 then
       run.advanced_on_clear = mode.value == 1 and flow.value ~= 2
       if run.advanced_on_clear then run.cycle = run.cycle % 3 + 1 end
@@ -326,21 +360,21 @@ mod.on("frame", function(e)
   if run.phase == "clearing" then clear_encounter(); return end
   if run.phase == "reset" then
     if not heal() or not player.set_position(HOME[1], HOME[2], HOME[3]) then return end
+    x, z = HOME[1], HOME[3]
     run.phase = "waiting"
   end
   if #enemies.list() ~= 0 then return end
   if (recovery.value ~= 2 or run.restore_hp) and not heal() then return end
-  if spawn() then
+  if spawn(x, z) then
     run.phase, run.failures = "fighting", 0
     run.restore_hp = false
-    if mode.value == 5 and run.endless_announced ~= run.wave then
-      run.endless_announced = run.wave
-      mod.notice("Endless Heartless - Wave " .. run.wave .. ": " .. GROUP_NAMES[group_index()] .. ".")
-    end
-    if run.recovering then
+    if mode.value == 5 and run.wave == 1 then
+      local prefix = run.recovering and "Practice recovered. " or ""
+      mod.notice(prefix .. "Wave 1: " .. GROUP_NAMES[group_index()] .. ".")
+    elseif run.recovering then
       mod.notice("Practice recovered. " .. GROUP_NAMES[group_index()] .. " ready.")
-      run.recovering = false
     end
+    run.recovering = false
   else
     run.failures, run.ticks = run.failures + 1, 30
     if run.failures >= 20 then

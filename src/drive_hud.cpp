@@ -11,6 +11,8 @@
 #include <windows.h>
 #include <memory>
 #include <atomic>
+#elif defined(__EMSCRIPTEN__)
+#include <emscripten.h>
 #endif
 
 namespace rxhud {
@@ -20,7 +22,7 @@ Model make_model(const rxdrive::View& view, bool visible) noexcept {
     if (view.phase == rxdrive::Phase::Active || view.phase == rxdrive::Phase::RestorationQueued) {
         if (!view.duration_ticks) return result;
         const unsigned remaining = std::min(view.remaining_ticks, view.duration_ticks);
-        result.mode = Mode::Active;
+        result.mode = view.phase == rxdrive::Phase::RestorationQueued ? Mode::RestorationQueued : Mode::Active;
         result.fraction = static_cast<float>(remaining) / static_cast<float>(view.duration_ticks);
         result.seconds = remaining / 60 + (remaining % 60 != 0 ? 1u : 0u);
         if (view.phase == rxdrive::Phase::RestorationQueued)
@@ -33,7 +35,7 @@ Model make_model(const rxdrive::View& view, bool visible) noexcept {
         result.mode = view.ready && charge == view.capacity ? Mode::Ready : Mode::Charging;
         if (view.phase == rxdrive::Phase::ActivationQueued) {
             if (charge != view.capacity) return {};
-            result.mode = Mode::Ready;
+            result.mode = Mode::ActivationQueued;
             std::memcpy(result.status.data(), "QUEUED", 7);
         } else if (result.mode == Mode::Ready) std::memcpy(result.status.data(), "READY", 6);
         else {
@@ -65,26 +67,34 @@ Model make_feedback_model(const rxdrive::View& view, bool visible, std::uint64_t
     feedback.phase = view.phase;
     return model;
 }
-Layout make_layout(int width, int height, unsigned dpi) noexcept {
+namespace {
+Layout panel_layout(int unit) noexcept {
     Layout out;
-    if (width < 280 || height < 180 || width > 32768 || height > 32768) return out;
+    out.panel = {0, 0, 106 * unit, 23 * unit};
+    out.label = {8 * unit, 4 * unit, 31 * unit, 8 * unit};
+    out.status = {44 * unit, 4 * unit, 54 * unit, 8 * unit};
+    out.track = {8 * unit, 14 * unit, 90 * unit, 5 * unit};
+    out.font_px = 7 * unit;
+    out.valid = true;
+    return out;
+}
+}
+Layout make_layout(int width, int height, unsigned dpi) noexcept {
+    if (width < 280 || height < 180 || width > 32768 || height > 32768) return {};
     const float dpi_scale = static_cast<float>(std::clamp(dpi, 72u, 384u)) / 96.0F;
     const float fit = std::min({dpi_scale, static_cast<float>(width) / 720.0F,
                                static_cast<float>(height) / 360.0F});
     // One logical pixel always occupies a whole number of display pixels.
     // At small windows the same 5x7 letters remain legible instead of blurring.
     const int unit = std::clamp(static_cast<int>(std::lround(2.0F * fit)), 1, 8);
-    const int margin = 11 * unit, panel_width = 106 * unit, panel_height = 23 * unit;
+    Layout out = panel_layout(unit);
+    const int margin = 11 * unit;
     // Reserve the native bottom-right HP area rather than covering/replacing it.
     const int bottom_reserve = std::max({50, 44 * unit, static_cast<int>(height * 0.14F)});
-    out.panel = {width - margin - panel_width, std::max(margin, height - bottom_reserve - panel_height),
-                 panel_width, panel_height};
-    out.label = {8 * unit, 4 * unit, 31 * unit, 8 * unit};
-    out.status = {44 * unit, 4 * unit, 54 * unit, 8 * unit};
-    out.track = {8 * unit, 14 * unit, 90 * unit, 5 * unit};
-    out.font_px = 7 * unit;
+    out.panel.x = width - margin - out.panel.width;
+    out.panel.y = std::max(margin, height - bottom_reserve - out.panel.height);
     out.valid = out.panel.x >= 0 && out.panel.y >= 0 &&
-        out.panel.x + panel_width <= width && out.panel.y + panel_height <= height;
+        out.panel.x + out.panel.width <= width && out.panel.y + out.panel.height <= height;
     return out;
 }
 bool should_show(const Model& model, bool enabled, bool visible, bool minimized, bool focused, bool fresh) noexcept {
@@ -99,6 +109,20 @@ int fill_width(float fraction, int width) noexcept {
     // amount visible, including the final active tick, at small window sizes.
     return std::clamp(static_cast<int>(width * fraction), 1, width - 1);
 }
+#if defined(_WIN32) || defined(__EMSCRIPTEN__)
+struct PaintKey {
+    Mode mode = Mode::Hidden;
+    int fill = -1, gain_from = 0, gain_to = 0, width = 0, height = 0, font = 0;
+    unsigned seconds = 0;
+    std::array<char, 24> status{};
+    bool operator==(const PaintKey&) const = default;
+};
+PaintKey paint_key(const Model& model, const Layout& layout) noexcept {
+    return {model.mode, fill_width(model.fraction, layout.track.width),
+            fill_width(model.gain_from, layout.track.width), fill_width(model.gain_to, layout.track.width),
+            layout.panel.width, layout.panel.height, layout.font_px, model.seconds, model.status};
+}
+#endif
 struct Color { unsigned r, g, b, a; };
 void over(std::uint32_t& pixel, Color color) {
     const unsigned inverse = 255 - color.a;
@@ -249,9 +273,12 @@ Image render(const Model& model, const Layout& layout) noexcept {
     plate(image, {frame.x + unit, frame.y + unit, frame.width - 2 * unit, frame.height - 2 * unit},
           2 * unit, {8,19,31,245});
     rectangle(image, {7 * unit, 2 * unit, image.width - 15 * unit, unit}, {175,201,214,255});
+    const bool entering = model.mode == Mode::ActivationQueued;
+    const bool leaving = model.mode == Mode::RestorationQueued;
+    const bool gold = model.mode == Mode::Ready || entering;
     const bool low_time = model.mode == Mode::Active && model.seconds > 0 && model.seconds <= 3;
-    const Color accent = model.mode == Mode::Ready ? Color{255,205,83,255} :
-                         low_time ? Color{255,163,70,255} :
+    const Color accent = gold ? Color{255,205,83,255} :
+                         leaving ? Color{179,204,220,255} : low_time ? Color{255,163,70,255} :
                          model.mode == Mode::Active ? Color{85,165,255,255} : Color{65,210,238,255};
     rectangle(image, {3 * unit, 7 * unit, 2 * unit, 8 * unit}, accent);
     const auto track = layout.track;
@@ -261,8 +288,8 @@ Image render(const Model& model, const Layout& layout) noexcept {
     if (filled > 0) {
         rectangle(image, {track.x, track.y, filled, track.height}, accent);
         rectangle(image, {track.x, track.y, filled, unit},
-                  model.mode == Mode::Ready ? Color{255,237,166,255} :
-                  low_time ? Color{255,215,151,255} : Color{160,232,255,255});
+                  gold ? Color{255,237,166,255} :
+                  leaving ? Color{217,233,241,255} : low_time ? Color{255,215,151,255} : Color{160,232,255,255});
         rectangle(image, {track.x, track.y + track.height - unit, filled, unit},
                   {accent.r / 2, accent.g / 2, accent.b / 2,255});
     }
@@ -271,14 +298,30 @@ Image render(const Model& model, const Layout& layout) noexcept {
         const int end = std::min(filled, fill_width(model.gain_to, track.width));
         if (end > begin)
             rectangle(image, {track.x + begin, track.y + unit, end - begin, track.height - 2 * unit},
-                      model.mode == Mode::Ready ? Color{255,241,183,255} : Color{204,248,255,255});
+                      gold ? Color{255,241,183,255} : Color{204,248,255,255});
     }
-    // Ten bounded cells make progress readable without adding another number.
-    for (int cell = 1; cell < 10; ++cell)
-        rectangle(image, {track.x + cell * track.width / 10 - unit, track.y, unit, track.height}, {8,19,31,255});
+    // A pending form change gets directional dividers immediately, even if an
+    // ongoing attack holds up the swap. Leave the surviving fill edge intact.
+    for (int cell = 1; cell < 10; ++cell) {
+        const int divider = cell * track.width / 10 - unit;
+        if (!entering && !leaving) {
+            rectangle(image, {track.x + divider, track.y, unit, track.height}, {8,19,31,255});
+            continue;
+        }
+        for (int row = 0; row < 5; ++row) {
+            const int bend = (2 - std::abs(2 - row)) * unit;
+            const int x = divider + (entering ? bend : -bend);
+            // Keep empty chevrons visible after natural expiry, without lighting
+            // any part of the track as remaining time.
+            const int on_fill = std::clamp(filled - x, 0, unit);
+            rectangle(image, {track.x + x, track.y + row * unit, on_fill, unit}, {8,19,31,255});
+            rectangle(image, {track.x + x + on_fill, track.y + row * unit, unit - on_fill, unit},
+                      {80,108,126,255});
+        }
+    }
     if (!text(image, layout.label, layout.font_px, "DRIVE", false, {226,240,246,255}) ||
         !text(image, layout.status, layout.font_px, model.status.data(), true,
-              (model.mode == Mode::Ready || low_time) ? accent : Color{226,240,246,255})) return {};
+              (gold || leaving || low_time) ? accent : Color{226,240,246,255})) return {};
     return image;
     } catch (...) {
         // This optional HUD must never abort native combat for an allocation or
@@ -469,13 +512,6 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
     default: return DefWindowProcW(window, message, wparam, lparam);
     }
 }
-struct PaintKey {
-    Mode mode = Mode::Hidden;
-    int fill = -1, gain_from = 0, gain_to = 0, width = 0, height = 0, font = 0;
-    unsigned seconds = 0;
-    std::array<char, 24> status{};
-    bool operator==(const PaintKey&) const = default;
-};
 DWORD run_ui(Shared& state) {
     DpiScope dpi_context;
     HMODULE module = nullptr;
@@ -538,9 +574,7 @@ DWORD run_ui(Shared& state) {
             painted = false;
             if (!hud) continue;
         }
-        const PaintKey key{model.mode, fill_width(model.fraction, layout.track.width),
-                           fill_width(model.gain_from, layout.track.width), fill_width(model.gain_to, layout.track.width),
-                           layout.panel.width, layout.panel.height, layout.font_px, model.seconds, model.status};
+        const PaintKey key = paint_key(model, layout);
         if (!painted || !(key == last)) {
             const Image image = render(model, layout);
             if (image.pixels.empty() || !surface.create(image.width, image.height)) { ShowWindow(hud, SW_HIDE); continue; }
@@ -614,6 +648,48 @@ void stop() noexcept {
     shared.reset(); // join occurs without requiring either lock on the worker
     } catch (...) {}
 }
+#elif defined(__EMSCRIPTEN__)
+namespace {
+// The presenter copies this transient raster synchronously, before Wasm can
+// grow its memory. Null pixels clear the gauge. Zero height removes its strip.
+EM_JS(void, publish_browser_hud, (const std::uint32_t* pixels, int width, int height), {
+    if (typeof Module["onDaysDriveHud"] === "function")
+        Module["onDaysDriveHud"](pixels, width, height);
+});
+const Layout browser_layout = panel_layout(1);
+ChargeFeedback browser_feedback;
+PaintKey last_paint;
+bool browser_enabled, browser_painted;
+}
+bool start(bool enabled) noexcept {
+    set_enabled(enabled);
+    return true;
+}
+void update(const rxdrive::View& view, bool visible) noexcept {
+    if (!browser_enabled) return;
+    const auto model = make_feedback_model(view, visible, static_cast<std::uint64_t>(emscripten_get_now()),
+                                           browser_feedback);
+    const auto& panel = browser_layout.panel;
+    if (model.mode == Mode::Hidden) {
+        if (browser_painted) publish_browser_hud(nullptr, panel.width, panel.height);
+        browser_painted = false;
+        return;
+    }
+    const auto key = paint_key(model, browser_layout);
+    if (browser_painted && key == last_paint) return;
+    const auto image = render(model, browser_layout);
+    publish_browser_hud(image.pixels.empty() ? nullptr : image.pixels.data(), panel.width, panel.height);
+    browser_painted = !image.pixels.empty();
+    last_paint = key;
+}
+void set_enabled(bool enabled) noexcept {
+    browser_enabled = enabled;
+    browser_painted = false;
+    browser_feedback = {};
+    publish_browser_hud(nullptr, enabled ? browser_layout.panel.width : 0,
+                        enabled ? browser_layout.panel.height : 0);
+}
+void stop() noexcept { set_enabled(false); }
 #else
 bool start(bool) noexcept { return false; }
 void update(const rxdrive::View&, bool) noexcept {}

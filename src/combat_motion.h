@@ -11,7 +11,8 @@ using PacketPolicy = void (*)(KhRef attacker, KhRef enemy, KhRef packet, void* u
 
 struct Snapshot {
     KhRef actor = 0;
-    KhActor target = 0;
+    KhActor intended_target = 0; // native pick resolved when this attack began
+    KhActor target = 0; // confirmed contact for pursuit or Enemy Step
     unsigned attack_serial = 0;
     unsigned hit_frame = 0;
     int attack_id = -1;
@@ -30,7 +31,7 @@ struct Snapshot {
 bool attach(const KhEngine*, const KhActors*, const KhInput*, Permitted);
 void detach();
 void bind(KhRef actor);
-void attack_started(KhRef actor, int attack_id, int group, bool launcher = false);
+void attack_started(KhRef actor, int attack_id, int group, bool launcher = false, KhActor intended_target = 0);
 void state_changed(KhRef actor, int native_state);
 bool request_chase(KhRef actor);
 bool request_enemy_step(KhRef actor);

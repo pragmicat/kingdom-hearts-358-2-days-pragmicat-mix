@@ -30,12 +30,12 @@ void real_charge_ready_and_active_time() {
     v.charge = v.capacity; v.ready = true; model = rxhud::make_model(v, true);
     CHECK(model.mode == rxhud::Mode::Ready && model.fraction == 1 && std::strcmp(model.status.data(), "READY") == 0);
     v.phase = rxdrive::Phase::ActivationQueued; model = rxhud::make_model(v, true);
-    CHECK(model.mode == rxhud::Mode::Ready && model.fraction == 1 && std::strcmp(model.status.data(), "QUEUED") == 0);
+    CHECK(model.mode == rxhud::Mode::ActivationQueued && model.fraction == 1 && std::strcmp(model.status.data(), "QUEUED") == 0);
     v.phase = rxdrive::Phase::Active; v.remaining_ticks = 421; model = rxhud::make_model(v, true);
     CHECK(model.mode == rxhud::Mode::Active && model.seconds == 8 && std::strcmp(model.status.data(), "8s") == 0);
     CHECK(std::abs(model.fraction - 421.0F / 900.0F) < 0.0001F);
     v.phase = rxdrive::Phase::RestorationQueued; v.remaining_ticks = 0; model = rxhud::make_model(v, true);
-    CHECK(model.mode == rxhud::Mode::Active && model.fraction == 0 && model.seconds == 0 && std::strcmp(model.status.data(), "ENDING") == 0);
+    CHECK(model.mode == rxhud::Mode::RestorationQueued && model.fraction == 0 && model.seconds == 0 && std::strcmp(model.status.data(), "ENDING") == 0);
     v.remaining_ticks = 400; model = rxhud::make_model(v, true); CHECK(std::strcmp(model.status.data(), "ENDING") == 0 && model.fraction > 0);
 }
 void visibility_and_invalid_views_fail_closed() {
@@ -216,7 +216,8 @@ void every_state_fits_minimum_windows_dpi_and_long_timers() {
             const auto image=rxhud::render(state,layout);CHECK(!image.pixels.empty());
             unsigned label_ink=0,status_ink=0;
             const auto white=0xffe2f0f6u;
-            const auto status_color=state.mode==rxhud::Mode::Ready?0xffffcd53u:
+            const auto status_color=state.mode==rxhud::Mode::Ready||state.mode==rxhud::Mode::ActivationQueued?0xffffcd53u:
+                state.mode==rxhud::Mode::RestorationQueued?0xffb3ccdcu:
                 state.seconds>0&&state.seconds<=3?0xffffa346u:white;
             for(int y=layout.label.y;y<layout.label.y+layout.label.height;++y)
                 for(int x=layout.label.x;x<layout.label.x+layout.label.width;++x)
@@ -236,6 +237,33 @@ void every_state_fits_minimum_windows_dpi_and_long_timers() {
     CHECK(rxhud::render(model,layout).pixels.empty()); // bounded malformed status, no strlen overrun
     layout.status.x=std::numeric_limits<int>::max();
     CHECK(rxhud::render(states[0],layout).pixels.empty());
+}
+void pending_forms_show_direction_at_full_partial_and_empty_gauge() {
+    auto v = view();
+    v.charge = v.capacity; v.ready = true;
+    for (const auto& size : {std::pair{280,180}, {1280,720}}) {
+        const auto layout = rxhud::make_layout(size.first, size.second);
+        const int unit = layout.font_px / 7;
+        const int first_divider = layout.track.width / 10 - unit;
+        const auto pixel = [&](const rxhud::Image& image, int offset, int row) {
+            return image.pixels[static_cast<std::size_t>(layout.track.y + row * unit) * image.width
+                              + layout.track.x + first_divider + offset * unit];
+        };
+        v.phase = rxdrive::Phase::Normal;
+        const auto ready = rxhud::render(rxhud::make_model(v, true), layout);
+        v.phase = rxdrive::Phase::ActivationQueued;
+        const auto entering = rxhud::render(rxhud::make_model(v, true), layout);
+        CHECK(pixel(ready, 0, 2) == pixel(entering, 2, 2));
+        CHECK(pixel(ready, 0, 2) != pixel(entering, 0, 2));
+        v.phase = rxdrive::Phase::RestorationQueued;
+        v.remaining_ticks = v.duration_ticks / 2;
+        const auto leaving = rxhud::render(rxhud::make_model(v, true), layout);
+        CHECK(pixel(leaving, -2, 2) == pixel(entering, 2, 2));
+        v.remaining_ticks = 0;
+        const auto empty = rxhud::render(rxhud::make_model(v, true), layout);
+        CHECK(pixel(empty, -2, 2) != pixel(empty, 0, 2));
+        CHECK(pixel(empty, 0, 2) == 0xff030a12u);
+    }
 }
 void low_time_uses_a_steady_warm_cue_without_changing_timer() {
     auto v=view();v.phase=rxdrive::Phase::Active;v.duration_ticks=900;
@@ -416,6 +444,7 @@ int main(int argc,char** argv) {
         {"charge feedback follows real gains and resets across context changes",test::charge_highlights_follow_real_gains_and_reset_with_context},
         {"portable pixel glyphs are visible, crisp and contained",test::portable_glyphs_are_visible_crisp_and_contained},
         {"all HUD states fit small windows, high DPI and long timers",test::every_state_fits_minimum_windows_dpi_and_long_timers},
+        {"pending form changes point in opposite directions across the gauge",test::pending_forms_show_direction_at_full_partial_and_empty_gauge},
         {"last three seconds use a steady warm cue",test::low_time_uses_a_steady_warm_cue_without_changing_timer},
 #ifdef _WIN32
         {"offscreen GDI and USER resources are released",test::repeated_offscreen_rendering_releases_gdi_resources},

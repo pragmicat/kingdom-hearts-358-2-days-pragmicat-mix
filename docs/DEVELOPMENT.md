@@ -14,6 +14,17 @@ preview while game linking and boot are pending. ROM selection and extraction
 stay on the player's device. Cloud file-picker permission was declined, so
 the import flow has Node coverage and still needs validation with a real cartridge.
 
+The latest gameplay pass carries the aimed enemy through a multi-target launcher
+or aerial sweep, and a fresh Technique tap survives the handoff between a
+committed Light and its next swing. Endless reinforcements pick an open arena
+pad if their usual one is crowded. Clearing a wave announces the next group
+during the break. Drive uses directional marks when a form change is pending.
+The Wasm mod publishes that same native HUD to Canvas between the two screens.
+Browser gamepad attacks carry their input source through the combo buffer.
+Confirmed melee damage can trigger one optional pulse per swing. Practice cues
+come from the port's Lua notice queue and appear below the canvas.
+Native controller feel and in-game readability still need a playthrough.
+
 **Endless Heartless is implemented in the native practice source.** Select
 Target preset 5 to refill individual defeated enemies while survivors remain,
 then rotate bounded ground/aerial/armored waves without a final wave. Wave and

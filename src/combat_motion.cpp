@@ -169,9 +169,11 @@ int apply_hit(KhRef enemy, KhRef source, KhRef packet) {
         state.confirmed_hit = true;
         state.hit_frame = now();
         state.damage += damage;
-        // Keep the first successful target for this attack; multi-target sweeps
-        // must not randomly redirect the chase as later collision slots run.
-        if (!state.target || actors->kind(state.target) != KH_ACTOR_ENEMY) {
+        // On a sweep, keep the first survivor unless the attack's original pick
+        // also takes damage. A Jump already accepted keeps its own target.
+        const bool preferred = target == state.intended_target && !state.chase_queued && !state.enemy_step_queued;
+        if (after > 0 && !state.chasing && target != state.target &&
+            (preferred || !state.target || actors->kind(state.target) != KH_ACTOR_ENEMY)) {
             state.target = target;
             std::copy(at, at + 3, target_at_hit);
             state.launcher_confirmed = false;
@@ -301,7 +303,7 @@ void bind(KhRef actor) {
     const KhActor current = actors->player(0);
     if (current && actors->ref(current) == actor) { state.actor = actor; player_handle = current; }
 }
-void attack_started(KhRef actor, int id, int group, bool launcher) {
+void attack_started(KhRef actor, int id, int group, bool launcher, KhActor intended_target) {
     bind(actor);
     if (!valid(actor)) return;
     track_landing();
@@ -313,6 +315,7 @@ void attack_started(KhRef actor, int id, int group, bool launcher) {
     state.attack_id = id;
     state.group = group;
     state.launcher = launcher;
+    state.intended_target = intended_target;
     target_hit_frame = 0;
     notified = {}; notified_count = 0;
 }
@@ -331,6 +334,7 @@ void state_changed(KhRef actor, int native_state) {
         clear_hit_confirmation();
         state.attack_serial = 0;
         state.attack_id = -1;
+        state.intended_target = 0;
         state.group = 0;
         state.launcher = false;
         notified = {}; notified_count = 0;

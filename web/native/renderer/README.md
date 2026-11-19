@@ -5,6 +5,12 @@ presents its final buffers through Canvas2D. It is a reusable browser-port
 component. It does **not** start the Days game, run Pragmicat combat, or emulate a
 ROM. No ROM, extracted files, saves, original artwork, or game data are included.
 
+In a linked Pragmicat session the combat module draws its native Drive panel
+between the two screens. The game keeps both 256×192 images and the entire
+lower touchscreen. The panel uses the same glyphs, charge highlight and
+form-change cues as the PC mod. The strip keeps its height when combat pauses
+and disappears when the mod disables the meter.
+
 The upstream GPU/HLSL backend is unnecessary for the initial browser path.
 `runtime/display/display.c` already draws all 3D and 2D in software when the
 host returns zero from `khdays_host_frame_wants()`. Have the browser host return

@@ -10,7 +10,7 @@ const { default: createRenderer } = await import(url);
 const module = await createRenderer({ wasmBinary: await readFile(new URL("./days_software_renderer.wasm", url)) });
 let displayed;
 const context = {
-  createImageData(w, h) { return { data: new Uint8ClampedArray(w * h * 4) }; },
+  createImageData(w, h) { return { width: w, height: h, data: new Uint8ClampedArray(w * h * 4) }; },
   putImageData(image) { displayed = image; },
 };
 const canvas = { width: 0, height: 0, getContext() { return context; } };
