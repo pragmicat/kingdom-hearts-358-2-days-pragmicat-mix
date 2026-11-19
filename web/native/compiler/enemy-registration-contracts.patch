@@ -1,0 +1,52 @@
+--- a/port/tools/prepare.py
++++ b/port/tools/prepare.py
+@@ -5191,6 +5191,40 @@
+     raise SystemExit("prepare.py: an unclosed brace")
+
+
++# The enemy loader calls the overlay's entry as void(void). An entry stores
++# one factory reference; Ov107_SpawnEntityClass later calls it for an actor.
++ENEMY_REGISTRATION_FILE = re.compile(
++    r"src/overlays/enemies/ov(\d{3})_\w+/Ov\1_RegisterEntityClass\.c"
++)
++ENEMY_REGISTRATION_BODY = re.compile(
++    r"extern (?:int|void) Ov107_RegisterHandler\((?:int, void \*|int a, void \*handler|"
++    r"int arg0, void \(\*arg1\)\(int\))\);\s*"
++    r"extern (?:int|void) (?P<factory>\w+)\((?:int|void)\);\s*"
++    r"(?:int|void) (?P<entry>\w+)\(void\) \{\s*"
++    r"(?:return )?Ov107_RegisterHandler\((?P<enemy>ENEMY_\w+), (?:\(void \*\)&)?(?P=factory)\);\s*\}\s*\Z"
++)
++
++
++def enemy_registration(text: str, src: Path) -> str:
++    body = ENEMY_REGISTRATION_BODY.search(text)
++    if not body or body["entry"] != src.stem or not body["factory"].startswith(src.stem.split("_")[0] + "_"):
++        raise SystemExit(f"unrecognized enemy registration body: {src}")
++    factory = body["factory"]
++    # The pinned factories take one word and return either an integer actor
++    # handle or an actor pointer. Use the definition beside this entry.
++    definition = src.with_name(factory + ".c").read_text(encoding="utf-8")
++    signatures = re.findall(rf"^(int |void \*){re.escape(factory)}\(int \w+\)\s*\{{", definition, re.M)
++    if len(signatures) != 1:
++        raise SystemExit(f"unrecognized factory definition for {src}: {factory}")
++    return (
++        text[:body.start()]
++        + "extern void Ov107_RegisterHandler(int id, void *factory);\n"
++        + f"extern {signatures[0]}{factory}(int);\n\n"
++        + f"void {body['entry']}(void) {{\n"
++        + f"    Ov107_RegisterHandler({body['enemy']}, (void *)&{factory});\n}}\n"
++    )
++
++
+ def cpp_to_c(text: str, rel: str) -> str:
+     methods: dict[str, tuple[int, str, str]] = {}  # name -> (slot, result, parameters)
+
+@@ -5713,6 +5747,8 @@
+             text = src.read_text(encoding="utf-8", errors="replace")
+             # Anything still carrying ARM assembly after the transforms is
+             # hardware-level code the HAL replaces.
++            if ENEMY_REGISTRATION_FILE.fullmatch(rel):
++                text = enemy_registration(text, src)
+             new = transform(text)
+             new = font_layout.patch(new, rel)
+             file_hooks = hooks.get(Path(rel).stem, []) + FILE_HOOKS.get(rel, [])

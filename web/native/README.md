@@ -155,6 +155,7 @@ Initialize its pinned decompilation submodule before source generation.
 27. `compiler/sdk-state-wrapper-contracts.patch`
 28. `compiler/font-splitter-contract.patch`
 29. `compiler/signed-division-quotient.patch`
+30. `compiler/enemy-registration-contracts.patch`
 
 Run the upstream generator with the Emscripten SDK active:
 

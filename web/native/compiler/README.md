@@ -154,6 +154,13 @@ quotient. Callers that declare the full 64-bit result also receive the remainder
 The mission-results digit routine ran against the real helper in WebAssembly.
 Dividing the most negative 32-bit integer by -1 produces the ARM result.
 
+`enemy-registration-contracts.patch` repairs the loader entry points for all
+188 enemy overlays. Each entry registers the factory defined in its overlay
+with the original enemy ID. WebAssembly execution of all 188 entries confirmed
+the expected factory address in each slot. The original spawn dispatcher
+passed the correct spawn record to a fixture factory and returned its actor
+reference. Testing individual enemies in battle still requires a game boot.
+
 The resumed whole-game run with the initial discarded-return repair emitted
 21,869 files. It reported additional incompatible returns and callback
 signatures before it could write `sources.cmake`.
