@@ -1,0 +1,14 @@
+diff --git a/port/tools/prepare.py b/port/tools/prepare.py
+--- a/port/tools/prepare.py
++++ b/port/tools/prepare.py
+@@ -4010,4 +4010,10 @@
+ FILE_HOOKS = {
++    # The title-screen font saves the splitter's address for indirect calls.
++    # Its pinned definition returns a UTF-16 code unit and advances the cursor.
++    "libs/nns/g2d/calls/NNS_G2dFontInitUTF16.c": [
++        ("extern void NNSi_G2dSplitCharUTF16(void);",
++         "extern unsigned short NNSi_G2dSplitCharUTF16(unsigned short **ppChar);"),
++    ],
+     # The pinned sole caller, Ov002_ReleaseSlotOwner, declares this wrapper
+     # void and discards its result. No pinned code takes its address. Its
+     # implementation forwards DList_Unlink's nonexistent return; the real

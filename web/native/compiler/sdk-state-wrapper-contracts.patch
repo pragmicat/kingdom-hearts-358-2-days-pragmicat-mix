@@ -1,0 +1,33 @@
+--- a/port/tools/prepare.py
++++ b/port/tools/prepare.py
+@@ -4220,6 +4220,30 @@
+         _gfd_defaults.append((f"extern void {_stub}(void);", f"extern {_signature};"))
+         FILE_HOOKS[f"libs/nns/gfd/auto/{_stub}.c"] = [(f"int {_stub}(void)", _signature)]
+
++# These SDK wrappers apply a change and their callers discard the result.
++# Keep their side effects and expose the same void signatures as the targets.
++FILE_HOOKS["libs/nitro/gx/calls/GX_SetBankForLCDC.c"] = [
++    ("extern void *GX_VRAMCNT_SetLCDC_();", "extern void GX_VRAMCNT_SetLCDC_(int banks);"),
++    ("void *GX_SetBankForLCDC(int bank)", "void GX_SetBankForLCDC(int bank)"),
++    ("return GX_VRAMCNT_SetLCDC_(bank);", "GX_VRAMCNT_SetLCDC_(bank);"),
++]
++FILE_HOOKS["src/overlays/system/ov001_boot/Ov001_ClearVideoMemory.c"] = [
++    ("extern int GX_SetBankForLCDC();", "extern void GX_SetBankForLCDC(int banks);"),
++]
++FILE_HOOKS["libs/nitro/snd/calls/SND_SetPlayerChannelPriority.c"] = [
++    ("extern void *SNDi_SetPlayerParam();",
++     "extern void SNDi_SetPlayerParam(int player, int param, int value, int size);"),
++    ("void *SND_SetPlayerChannelPriority(int player, int prio)", "void SND_SetPlayerChannelPriority(int player, int prio)"),
++    ("return SNDi_SetPlayerParam(player, 4, prio, 1);", "SNDi_SetPlayerParam(player, 4, prio, 1);"),
++]
++for _heap_kind in ("Exp", "Frm"):
++    _destroy = f"NNS_FndDestroy{_heap_kind}Heap"
++    FILE_HOOKS[f"libs/nns/fnd/calls/{_destroy}.c"] = [
++        ("extern void *NNSi_FndFinalizeHeap();", "extern void NNSi_FndFinalizeHeap(void *heap);"),
++        (f"void *{_destroy}(void *arg0)", f"void {_destroy}(void *heap)"),
++        ("return NNSi_FndFinalizeHeap(arg0);", "NNSi_FndFinalizeHeap(heap);"),
++    ]
++
+ FILE_HOOKS["src/overlays/scenes/ov002_field/Ov002_SetCaptionText.c"] = [
+     (
+         "void Ov002_SetCaptionText(const u16 *pText)\n{",

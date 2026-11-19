@@ -137,10 +137,20 @@ indirect calls. A focused Wasm dispatch check exercised the default table,
 allocation from both ends of the frame palette, release, and rejection of
 an allocation larger than the remaining space.
 
+`sdk-state-wrapper-contracts.patch` corrects the return types on the LCDC
+graphics-bank setter, the sound-player channel-priority setter, and the
+expandable and frame heap destructors. Nine pinned SDK routines now rewrite
+and link together. Running them in WebAssembly exercised the bank shadow and
+selected registers, the sound priority command, and removal of both heaps
+from their owning lists.
+
+`font-splitter-contract.patch` gives the title-screen font initializer the
+actual signature of its UTF-16 character reader. The reader advances its
+cursor by one code unit and returns that unit through the installed callback.
+
 The resumed whole-game run with the initial discarded-return repair emitted
 21,869 files. It reported additional incompatible returns and callback
-signatures before it could write `sources.cmake`. Further reported blockers include
-graphics bank and sequencer wrappers that forward return values from void calls.
+signatures before it could write `sources.cmake`.
 Rerun with the exact source repairs above, using the existing preprocessing
 cache. Gameplay testing still needs a complete rewrite, full link and cartridge
 boot.
