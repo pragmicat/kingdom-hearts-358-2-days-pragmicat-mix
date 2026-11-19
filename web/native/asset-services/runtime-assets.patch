@@ -1,0 +1,347 @@
+diff --git a/port/runtime/mods/asset_paths.h b/port/runtime/mods/asset_paths.h
+new file mode 100644
+index 0000000..e6c59fb
+--- /dev/null
++++ b/port/runtime/mods/asset_paths.h
+@@ -0,0 +1,40 @@
++/* Local output paths used by the texture and sheet-colour tools. */
++#ifndef KHDAYS_ASSET_PATHS_H
++#define KHDAYS_ASSET_PATHS_H
++
++#include <stddef.h>
++#include <string.h>
++
++#if defined(KHDAYS_BROWSER)
++#include <sys/stat.h>
++#define KHDAYS_ASSET_PATH_MAX 4096
++#else
++#include <windows.h>
++#define KHDAYS_ASSET_PATH_MAX MAX_PATH
++#endif
++
++/* Creates each parent component. Existing directories are harmless. */
++static inline void khdays_asset_make_directories(const char *path)
++{
++    char part[KHDAYS_ASSET_PATH_MAX];
++    if (*path == '\0') {
++        return;
++    }
++    for (size_t i = 1; i < sizeof(part) - 1 && path[i] != '\0'; ++i) {
++#if defined(KHDAYS_BROWSER)
++        if (path[i] == '/') {
++#else
++        if (path[i] == '/' || path[i] == '\\') {
++#endif
++            memcpy(part, path, i);
++            part[i] = '\0';
++#if defined(KHDAYS_BROWSER)
++            mkdir(part, 0777);
++#else
++            CreateDirectoryA(part, NULL);
++#endif
++        }
++    }
++}
++
++#endif
+diff --git a/port/runtime/mods/sheet_colours.c b/port/runtime/mods/sheet_colours.c
+index c79986a..b0b83b8 100644
+--- a/port/runtime/mods/sheet_colours.c
++++ b/port/runtime/mods/sheet_colours.c
+@@ -13,7 +13,7 @@
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
+-#include <windows.h>
++#include "asset_paths.h"
+
+ #define LOOK_EVERY 8    /* VBlanks between looks at what is shown */
+ #define WRITE_EVERY 300 /* VBlanks between writes of what changed */
+@@ -472,18 +472,6 @@ static void look_at_sprites(int engine)
+     }
+ }
+
+-static void make_directories(const char *path)
+-{
+-    char part[MAX_PATH];
+-    for (int i = 0; path[i] != '\0' && i < MAX_PATH - 1; ++i) {
+-        if ((path[i] == '/' || path[i] == '\\') && i > 0) {
+-            memcpy(part, path, (size_t)i);
+-            part[i] = '\0';
+-            CreateDirectoryA(part, NULL);
+-        }
+-    }
+-}
+-
+ /* What the file already says (an earlier session's, another copy's) taken in
+  * for the tiles this session has not seen: each with the colours of its row
+  * in the file, counted once, so that what this session sees twice decides. */
+@@ -537,11 +525,11 @@ static void take_written(const char *path, Sheet *s)
+  * from FIRST_EXTRA on for the others --, then each tile's row. */
+ static void write_sheet(const char *dump, Sheet *s)
+ {
+-    char path[MAX_PATH];
++    char path[KHDAYS_ASSET_PATH_MAX];
+     int *used = NULL, *count = NULL, *number = NULL, nused = 0, next = FIRST_EXTRA;
+     FILE *f;
+     snprintf(path, sizeof(path), "%s/%s.colours", dump, s->name);
+-    make_directories(path);
++    khdays_asset_make_directories(path);
+     take_written(path, s);
+     for (u32 t = 0; t < s->tiles; ++t) {
+         int i = 0;
+diff --git a/port/runtime/mods/textures.c b/port/runtime/mods/textures.c
+index e13a7c7..0e39cab 100644
+--- a/port/runtime/mods/textures.c
++++ b/port/runtime/mods/textures.c
+@@ -2,6 +2,7 @@
+  * palette slots, their bank, the bank's origin (origin.c) and the names there (names.cpp); looked up
+  * once per slot place, format and palette, and again only after its bank changed. */
+ #include "textures.h"
++#include "asset_paths.h"
+ #include "../../gfx/character_shadow.h"
+ #include "names.h"
+ #include "../core/origin.h"
+@@ -12,16 +13,17 @@
+ #include "../../host/app/host.h"
+ #include "../../host/render/png_io.h"
+
++#if !defined(KHDAYS_BROWSER)
+ #include <intrin.h>
++#endif
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
+-#include <windows.h>
+
+ static int env_read;
+ static int trace;
+ static int env_hd;
+-static char env_dump_dir[MAX_PATH];
++static char env_dump_dir[KHDAYS_ASSET_PATH_MAX];
+
+ /* The directory the dump writes to now ("" when it is off): KHDAYS_DUMP_GRAPHICS=DIR,
+  * or saves/dump/graphics with the video settings' "Dump graphics". */
+@@ -222,18 +224,43 @@ static Seen *seen_add(u32 param, u32 pltt)
+ typedef struct Replacement {
+     KhdaysTextureReplacement texture;
+     char *name;
++#if defined(KHDAYS_BROWSER)
++    uint32_t version;
++#else
+     volatile LONG version; /* for one that changes, its version; else 0 */
+     SRWLOCK lock;          /* for one that changes, guards its texels */
++#endif
+ } Replacement;
+ static Replacement *volatile blocks[32];
++#if defined(KHDAYS_BROWSER)
++#if defined(__EMSCRIPTEN_PTHREADS__)
++#error The browser texture registry requires the single game/render execution thread
++#endif
++static int nreplacements;
++#else
+ static volatile LONG nreplacements;
++#endif
++
++static void publish_replacements(int count)
++{
++#if defined(KHDAYS_BROWSER)
++    nreplacements = count;
++#else
++    InterlockedExchange(&nreplacements, count);
++#endif
++}
+
+ /* Which block holds entry `id`. */
+ static unsigned long block_of(int id)
+ {
++#if defined(KHDAYS_BROWSER)
++    /* The argument is always positive; clz(0) is undefined. */
++    return 31u - (unsigned)__builtin_clz((unsigned)id / BLOCK + 1);
++#else
+     unsigned long k;
+     _BitScanReverse(&k, (unsigned long)id / BLOCK + 1);
+     return k;
++#endif
+ }
+
+ /* Entry `id` (which must exist). */
+@@ -256,8 +283,13 @@ static Replacement *new_entry(int n, const char *name)
+         blocks[k] = block;
+     }
+     e = entry(n);
+-    e->name = _strdup(name);
+-    return e->name != NULL ? e : NULL;
++    const size_t length = strlen(name) + 1;
++    e->name = malloc(length);
++    if (e->name == NULL) {
++        return NULL;
++    }
++    memcpy(e->name, name, length);
++    return e;
+ }
+
+ /* The index of the replacement named `name`, or -1. */
+@@ -272,26 +304,30 @@ static int find_entry(const char *name, int n)
+
+ int khdays_textures_replacements(void)
+ {
++#if defined(KHDAYS_BROWSER)
++    return nreplacements;
++#else
+     return (int)InterlockedCompareExchange(&nreplacements, 0, 0);
++#endif
+ }
+
+ const char *khdays_textures_name(int id)
+ {
+-    return id >= 0 && id < (int)InterlockedCompareExchange(&nreplacements, 0, 0) ? entry(id)->name : NULL;
++    return id >= 0 && id < khdays_textures_replacements() ? entry(id)->name : NULL;
+ }
+
+ const KhdaysTextureReplacement *khdays_textures_replacement(int id)
+ {
+-    return id >= 0 && id < (int)InterlockedCompareExchange(&nreplacements, 0, 0) ? &entry(id)->texture : NULL;
++    return id >= 0 && id < khdays_textures_replacements() ? &entry(id)->texture : NULL;
+ }
+
+ /* The replacement a mod has for `name` (mods/<Mod>/graphics/<name>.png),
+  * read once. -1 if there is none, or it cannot be read. */
+ static int replacement_for(const char *name, u32 param)
+ {
+-    char relative[200], path[MAX_PATH];
++    char relative[200], path[KHDAYS_ASSET_PATH_MAX];
+     const char *error = NULL;
+-    int width, height, ow, oh, n = (int)InterlockedCompareExchange(&nreplacements, 0, 0);
++    int width, height, ow, oh, n = khdays_textures_replacements();
+     u8 *pixels;
+     Replacement *e;
+     const int known = find_entry(name, n);
+@@ -329,7 +365,7 @@ static int replacement_for(const char *name, u32 param)
+     e->texture.height = height;
+     e->texture.rgba = (const uint32_t *)pixels; /* 8-bit RGBA, red first: little-endian words */
+     e->texture.info = KHDAYS_REPLACEMENT_ON_DEMAND; /* drawn by the 3D's polygons only */
+-    InterlockedExchange(&nreplacements, n + 1);
++    publish_replacements(n + 1);
+     if (trace) {
+         fprintf(stderr, "textures: %s drawn instead from %s (%dx%d)\n", name, path, width, height);
+     }
+@@ -351,7 +387,7 @@ int khdays_textures_add(const char *name, int width, int height, const uint8_t *
+  * host/render/gpu_hd.c). */
+ static int add(const char *name, int width, int height, const uint32_t *texels, uint32_t info, int changing)
+ {
+-    const int n = (int)InterlockedCompareExchange(&nreplacements, 0, 0);
++    const int n = khdays_textures_replacements();
+     const int known = find_entry(name, n);
+     Replacement *e;
+     if (known >= 0)
+@@ -366,10 +402,12 @@ static int add(const char *name, int width, int height, const uint32_t *texels,
+     e->texture.rgba = texels;
+     e->texture.info = info;
+     if (changing) {
++#if !defined(KHDAYS_BROWSER)
+         InitializeSRWLock(&e->lock);
++#endif
+         e->version = 1;
+     }
+-    InterlockedExchange(&nreplacements, n + 1);
++    publish_replacements(n + 1);
+     return n;
+ }
+
+@@ -394,33 +432,47 @@ int khdays_textures_add_changing(const char *name, int width, int height, uint32
+
+ uint32_t *khdays_textures_change_begin(int id)
+ {
++#if !defined(KHDAYS_BROWSER)
+     AcquireSRWLockExclusive(&entry(id)->lock);
++#endif
+     return (uint32_t *)entry(id)->texture.rgba;
+ }
+
+ void khdays_textures_change_end(int id)
+ {
++#if defined(KHDAYS_BROWSER)
++    ++entry(id)->version;
++#else
+     InterlockedIncrement(&entry(id)->version);
+     ReleaseSRWLockExclusive(&entry(id)->lock);
++#endif
+ }
+
+ uint32_t khdays_textures_version(int id)
+ {
+-    return id >= 0 && id < (int)InterlockedCompareExchange(&nreplacements, 0, 0) ? (uint32_t)entry(id)->version : 0u;
++    return id >= 0 && id < khdays_textures_replacements() ? (uint32_t)entry(id)->version : 0u;
+ }
+
+ void khdays_textures_read_begin(int id)
+ {
++#if defined(KHDAYS_BROWSER)
++    (void)id; /* Game callbacks and software presentation are serialized. */
++#else
+     if (entry(id)->version != 0) {
+         AcquireSRWLockShared(&entry(id)->lock);
+     }
++#endif
+ }
+
+ void khdays_textures_read_end(int id)
+ {
++#if defined(KHDAYS_BROWSER)
++    (void)id; /* Game callbacks and software presentation are serialized. */
++#else
+     if (entry(id)->version != 0) {
+         ReleaseSRWLockShared(&entry(id)->lock);
+     }
++#endif
+ }
+
+ /* --- The dump ------------------------------------------------------------------- */
+@@ -446,19 +498,6 @@ static int dumped_already(const char *name)
+     return 0;
+ }
+
+-/* Creates every directory on the way to `path`. */
+-static void make_directories(const char *path)
+-{
+-    char part[MAX_PATH];
+-    for (int i = 0; path[i] != '\0' && i < MAX_PATH - 1; ++i) {
+-        if ((path[i] == '/' || path[i] == '\\') && i > 0) {
+-            memcpy(part, path, (size_t)i);
+-            part[i] = '\0';
+-            CreateDirectoryA(part, NULL);
+-        }
+-    }
+-}
+-
+ /* Decodes a texture as the port draws it, from `pages`: the DS's 5-bit
+  * colours and alpha 0-31, widened to 8 bits. 0 if there is no memory. */
+ static int decode_rgba(const KhdaysVramPages *pages, u32 param, u32 pltt, u8 *rgba)
+@@ -499,7 +538,7 @@ uint32_t *khdays_textures_decode_pages(const KhdaysVramPages *pages, uint32_t pa
+ int khdays_textures_write_png(const char *path, const uint8_t *rgba, int width, int height)
+ {
+     const char *error;
+-    make_directories(path);
++    khdays_asset_make_directories(path);
+     error = khdays_png_write(path, rgba, width, height);
+     if (error != NULL) {
+         fprintf(stderr, "textures: cannot write %s: %s\n", path, error);
+@@ -512,7 +551,7 @@ int khdays_textures_write_indexed_png(const char *path, const uint8_t *indices,
+                                       const uint8_t *palette, int colours)
+ {
+     const char *error;
+-    make_directories(path);
++    khdays_asset_make_directories(path);
+     error = khdays_png_write_indexed(path, indices, width, height, palette, colours, 1);
+     if (error != NULL) {
+         fprintf(stderr, "textures: cannot write %s: %s\n", path, error);
+@@ -549,7 +588,7 @@ void khdays_textures_decode(uint32_t param, const uint8_t *texels, uint32_t texe
+
+ static void dump(const char *name, u32 param, u32 pltt)
+ {
+-    char path[MAX_PATH];
++    char path[KHDAYS_ASSET_PATH_MAX];
+     int width, height;
+     u8 *rgba;
+     if (dumped_already(name)) {

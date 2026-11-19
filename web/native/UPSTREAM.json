@@ -1,0 +1,32 @@
+{
+  "repository": "https://github.com/Yokimitsuro/khdays-port",
+  "tag": "v0.1.5",
+  "commit": "2037f79a171524eafcf40a1d641b16da14667a64",
+  "decomp_commit": "93535afd7ca082f3d856bbf1cadae65be16d44ba",
+  "emscripten": "4.0.23",
+  "tested_node": "24.22.1",
+  "sha256": {
+    "LICENSE": "10dbb3b24b7d9665e26d9265d53af1de21fc77690713b065d147723f1a0b6345",
+    "port/host/app/context.h": "e193a8d3b31455b2c9ffbab52dd7c9ad8e343dd3b3893b1d64853b2c92b3da09",
+    "port/gfx/g3d.h": "e5fb89cb3465f216edd1ea61afe23039f6272d274193818f38f16d24e7fa6476",
+    "port/gpu/gpu2d.c": "140081ad31d4e6300aa26f0f85244bc8fb2ad51271ee0108fe70f9ab7915056f",
+    "port/gpu/gpu3d.c": "61d7a9ea490683842e357846e814b3939c68f793d9364983d8c65140a4f1c493",
+    "port/gpu/texdecode.c": "2a42a75ce236e96a980426f38f082932e100526999576a181eb884104ca14a28",
+    "port/gpu/vram_map.c": "719e1cb2f17c6892775fa32286505a309f20d15e0e551382a1c6bca75abf5547",
+    "port/gpu/gpu2d.h": "e373ecf96df603a5c51c77ccdca877970233cfaca794e475583e115333f5d445",
+    "port/gpu/gpu3d.h": "e71d62abb310c67d564c7094eedfca380c4f6ebd626ec6a010b86a28e40eaa29",
+    "port/gpu/texdecode.h": "b2bb3b80a7b7696bbd615b4eef9ceacafe51982da031a556325e4614678fe3c0",
+    "port/gpu/vram_map.h": "862b94b98dfea9a3d4dd87e2a133351ed915efcdb87554a13746662faf9aa00e"
+  },
+  "probe_sha256": {
+    "external/khdays-decomp/src/overlays/field/ov022_battle/Ov022_IsFrameInComboWindow.c": "4d3cb6e34d2e4f678eedf45b3272c16f62d8046f8b4bd1fb4f0f1b26f8e0906a",
+    "port/compat/khdays_references.h": "c9cea2465665efa641ce433e1bddc931aed621714aecff7044ad27841f7c0da3",
+    "port/tools/references/__init__.py": "0ea52a646cb2073ef51a38692749373f04778207eaa9eb0f77d87376588fe792",
+    "port/tools/references/build.py": "83b53ba79f1d731e96b715d553142da0d12be8d632da8726ad8bc795d9515698",
+    "port/tools/references/emit.py": "6230484eb48fc3f8ae72ff424c1a2b8599a0247bca9fa1102aec129ea79acd56",
+    "port/tools/references/layout.py": "b12a6c40e087c2ffcbd87b81ba5b65491147eeb3d8127243f932d17fa0e0c8a6",
+    "port/tools/references/parse.py": "ed3518ea7036573c7b247ddc1846087b35371d66772a6488796f2d3ab1304e10",
+    "port/tools/references/preprocess.py": "bd2830723e51b4fd13f15e29e121f3109f5dfd3f5b0b98e35d8d072b0333df4d",
+    "port/tools/references/types.py": "0188d86ef2da34607bd53d7bea983927e40d84207432ac73a267e7207bcd30ea"
+  }
+}

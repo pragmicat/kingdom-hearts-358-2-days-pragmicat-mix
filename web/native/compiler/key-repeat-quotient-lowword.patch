@@ -1,0 +1,135 @@
+diff --git a/port/tools/prepare.py b/port/tools/prepare.py
+--- a/port/tools/prepare.py
++++ b/port/tools/prepare.py
+@@ -4067,1 +4067,16 @@
++# Math_DivMod is the HAL's unsigned _u32_div_f: quotient in low32,
++# remainder in high32. This caller originally reads u32, then adds one
++# with unsigned wrap before storing u16. Spell both the real i64 ABI and
++# that exact low-word extraction; a signed cast would add overflow UB.
++FILE_HOOKS["src/engine/KeyRepeat_Update.c"] = [
++    (
++        "extern u32 Math_DivMod(u32 numer, u32 denom);",
++        "extern u64 Math_DivMod(u32 numer, u32 denom);",
++    ),
++    (
++        "kr->count[i] = Math_DivMod(elapsed, kr->interval * speed) + 1;",
++        "kr->count[i] = (u32)Math_DivMod(elapsed, kr->interval * speed) + 1;",
++    ),
++]
++
+ FILE_HOOKS["src/overlays/scenes/ov002_field/Ov002_SetCaptionText.c"] = [
+diff --git a/port/tools/key_repeat_abi_test.py b/port/tools/key_repeat_abi_test.py
+new file mode 100644
+--- /dev/null
++++ b/port/tools/key_repeat_abi_test.py
+@@ -0,0 +1,110 @@
++"""Exact unsigned low-word repair for the pinned KeyRepeat quotient consumer."""
++from pathlib import Path
++import os
++import subprocess
++import sys
++import tempfile
++import unittest
++
++sys.path.insert(0, str(Path(__file__).resolve().parent))
++import prepare
++from references import rewrite_text
++from references.emit import EmitFailure, Index
++from references.preprocess import Flags, preprocess
++
++PATH = "src/engine/KeyRepeat_Update.c"
++
++
++def patched(source):
++    for before, after in prepare.FILE_HOOKS[PATH]:
++        if source.count(before) != 1:
++            raise AssertionError("exact pinned KeyRepeat hook must match once")
++        source = source.replace(before, after)
++    return source
++
++
++class KeyRepeatABI(unittest.TestCase):
++    def test_used_i32_declaration_is_still_rejected_generically(self):
++        source = "unsigned Math_DivMod(unsigned,unsigned); unsigned f(unsigned a){return Math_DivMod(a,3)+1;}"
++        with self.assertRaisesRegex(EmitFailure, "used return value differs from defined i64"):
++            rewrite_text(source, "src/another_quotient.c", Index(game_functions={"Math_DivMod", "f"},
++                         discarded_returns={"Math_DivMod": "i64"}))
++
++    @unittest.skipUnless(os.environ.get("KHDAYS_TEST_DECOMP"), "set KHDAYS_TEST_DECOMP for pinned source")
++    def test_pinned_hook_preserves_unsigned_narrowing_before_increment(self):
++        root = Path(os.environ["KHDAYS_TEST_DECOMP"])
++        source = (root/PATH).read_text()
++        result = patched(source)
++        self.assertIn("extern u64 Math_DivMod(u32 numer, u32 denom);", result)
++        self.assertIn("(u32)Math_DivMod(elapsed, kr->interval * speed) + 1", result)
++        with self.assertRaisesRegex(AssertionError, "exact pinned"):
++            patched(source.replace("kr->interval * speed) + 1", "kr->interval * speed) + 2"))
++
++    @unittest.skipUnless(os.environ.get("KHDAYS_TEST_DECOMP") and os.environ.get("KHDAYS_TEST_EMCC"),
++                         "set pinned sources and Emscripten for real Wasm execution")
++    def test_rewritten_real_consumer_with_real_hal_and_edge_behavior(self):
++        root = Path(os.environ["KHDAYS_TEST_DECOMP"])
++        port = Path(__file__).resolve().parents[1]
++        source = patched((root/PATH).read_text())
++        hal = (port/"hal/sdk_runtime.c").read_text()
++        self.assertIn("u64 Math_DivMod(u32 numerator, u32 denominator)", hal)
++        self.assertIn("return ((u64)remainder << 32) | quotient;", hal)
++        main = r"""
++typedef unsigned int u32; typedef unsigned short u16;
++typedef struct {u16 mask,delay,interval,count[10];} KeyRepeat;
++const u16 data_02042218[10]={6,7,5,4,0,1,10,11,9,8};
++const u16 data_0204222c[10]={64,128,32,16,1,2,1024,2048,512,256};
++u32 gPadPressTimes[12]; u16 gPadHeld,gPadPressed;
++static u32 tick; static int mode;
++u32 VBlank_GetCount(void){return tick;} int GetFrameRateMode(void){return mode;}
++void khdays_hal_unimplemented(const char *name){(void)name;__builtin_trap();}
++void KeyRepeat_Update(KeyRepeat *kr);
++static int check(int m,u32 now,u32 stamp,u16 delay,u16 interval,u16 count,u16 want,int repeat) {
++    KeyRepeat kr={0};kr.mask=65535;kr.delay=delay;kr.interval=interval;kr.count[0]=count;
++    mode=m;tick=now;gPadPressTimes[6]=stamp;gPadHeld=64;gPadPressed=0;
++    KeyRepeat_Update(&kr);return kr.count[0]==want && kr.mask==(repeat?64:0);
++}
++int main(void) {
++    if(!check(0,32,0,2,3,0,5,1)) return 1;
++    if(!check(1,32,0,2,3,0,3,1)) return 2;
++    if(!check(2,30,0,2,3,0,10,1)) return 3; /* nonzero high-word remainder */
++    if(!check(2,1,0,2,3,0,0,0)) return 4; /* delay not reached */
++    if(!check(2,8,0,0,3,5,5,0)) return 5; /* existing count gate */
++    if(!check(2,3,0xfffffffcu,0,3,0,3,1)) return 6; /* tick wrap */
++    if(!check(2,0x7fffffffu,0,0,1,0,0,1)) return 7; /* signed+1 overflow boundary */
++    if(!check(2,0x80000001u,0,0,2,0,1,1)) return 8;
++    if(!check(2,0xffffffffu,0,0,1,0,0,1)) return 9; /* unsigned quotient+1 wrap */
++    if(!check(2,0xffffffffu,0,0,0,0,0,1)) return 10; /* helper's zero-divisor early exit */
++    KeyRepeat kr={0};mode=2;gPadHeld=gPadPressed=0;
++    for(int i=0;i<10;++i){kr.count[i]=100+i;gPadHeld|=data_0204222c[i];}
++    gPadPressed=gPadHeld;KeyRepeat_Update(&kr);
++    if(kr.mask!=gPadHeld) return 11;
++    for(int i=0;i<10;++i)if(kr.count[i])return 12;
++    gPadHeld=gPadPressed=0;kr.mask=65535;kr.count[0]=4;KeyRepeat_Update(&kr);
++    return kr.mask==0 && kr.count[0]==4 ? 0:13;
++}
++"""
++        with tempfile.TemporaryDirectory(prefix="days-keyrepeat-quotient-") as temp:
++            folder = Path(temp)
++            (folder/"khdays_references.h").write_text(
++                "typedef unsigned int khdays_ref;\n#define KHDAYS_W(r) ((void *)(r))\n"
++                "#define KHDAYS_REF(p) ((khdays_ref)(p))\n")
++            raw = folder/"repeat.raw.c";raw.write_text(source)
++            flags = Flags(includes=[root/"include"])
++            cooked = preprocess(raw, flags, dict(os.environ), os.environ["KHDAYS_TEST_EMCC"], backend="clang")
++            index = Index(game_functions={"Math_DivMod", "KeyRepeat_Update"},game_objects=set(),
++                          discarded_returns={"Math_DivMod":"i64"})
++            (folder/"repeat.c").write_text(rewrite_text(cooked, PATH, index))
++            (folder/"main.c").write_text(main)
++            result = folder/"repeat.cjs"
++            subprocess.run([os.environ["KHDAYS_TEST_EMCC"], "-std=c17", "-fms-extensions", "-O0",
++                            "-I", str(folder), str(folder/"repeat.c"), str(folder/"main.c"),
++                            str(port/"hal/sdk_runtime.c"), "-sENVIRONMENT=node", "-sSINGLE_FILE=1",
++                            "-sWASM_ASYNC_COMPILATION=0", "-sEXIT_RUNTIME=1", "-Werror",
++                            "-Wno-unknown-pragmas", "-Wno-parentheses-equality", "-Wl,--fatal-warnings",
++                            "-fsanitize=undefined", "-fno-sanitize-recover=undefined", "-o", str(result)],check=True)
++            subprocess.run([os.environ.get("KHDAYS_TEST_NODE","node"),str(result)],check=True)
++
++
++if __name__=="__main__":
++    unittest.main()

@@ -1,0 +1,191 @@
+diff --git a/port/runtime/core/boot.c b/port/runtime/core/boot.c
+index ba499c3..3568cbd 100644
+--- a/port/runtime/core/boot.c
++++ b/port/runtime/core/boot.c
+@@ -12,7 +12,11 @@
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
++#if defined(KHDAYS_BROWSER)
++#define sscanf_s sscanf /* only used for numeric fields */
++#else
+ #include <windows.h>
++#endif
+ 
+ #define U16(address) (*(volatile u16 *)KHDAYS_W(address))
+ #define U32(address) (*(volatile u32 *)KHDAYS_W(address))
+diff --git a/port/runtime/core/browser_counter.h b/port/runtime/core/browser_counter.h
+new file mode 100644
+index 0000000..371d4eb
+--- /dev/null
++++ b/port/runtime/core/browser_counter.h
+@@ -0,0 +1,48 @@
++#ifndef KHDAYS_BROWSER_COUNTER_H
++#define KHDAYS_BROWSER_COUNTER_H
++
++#include <emscripten.h>
++#include <stdint.h>
++
++/* These clock and scalar operations run on the same cooperative thread as
++ * the browser's game and input. Keep each operation free of suspension. */
++typedef int32_t LONG;
++typedef int64_t LONGLONG;
++typedef struct {
++    int64_t QuadPart;
++} LARGE_INTEGER;
++
++static inline void QueryPerformanceCounter(LARGE_INTEGER *value)
++{
++    value->QuadPart = (int64_t)(emscripten_get_now() * 1000000.0);
++}
++
++static inline void QueryPerformanceFrequency(LARGE_INTEGER *value)
++{
++    value->QuadPart = INT64_C(1000000000);
++}
++
++static inline LONG InterlockedExchange(volatile LONG *address, LONG value)
++{
++    const LONG old = *address;
++    *address = value;
++    return old;
++}
++
++static inline LONG InterlockedCompareExchange(volatile LONG *address, LONG value, LONG expected)
++{
++    const LONG old = *address;
++    if (old == expected) {
++        *address = value;
++    }
++    return old;
++}
++
++static inline LONG InterlockedIncrement(volatile LONG *address)
++{
++    const LONG next = (LONG)((uint32_t)*address + 1u);
++    *address = next;
++    return next;
++}
++
++#endif
+diff --git a/port/runtime/core/io_regs.c b/port/runtime/core/io_regs.c
+index c18d601..419ecb5 100644
+--- a/port/runtime/core/io_regs.c
++++ b/port/runtime/core/io_regs.c
+@@ -17,7 +17,9 @@
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
++#if !defined(KHDAYS_BROWSER)
+ #include <windows.h>
++#endif
+ 
+ /* The address a function returns to: its caller's instruction. */
+ #if defined(_MSC_VER)
+diff --git a/port/runtime/core/language.c b/port/runtime/core/language.c
+index ba6a635..46069fc 100644
+--- a/port/runtime/core/language.c
++++ b/port/runtime/core/language.c
+@@ -13,7 +13,12 @@
+ 
+ #include <stdio.h>
+ #include <stdlib.h>
++#if defined(KHDAYS_BROWSER)
++#include "browser_counter.h"
++#define sscanf_s sscanf /* only used for numeric fields */
++#else
+ #include <windows.h>
++#endif
+ 
+ #define FIRMWARE_LANGUAGE 0x027ffc80u + 0x64u
+ #define DATABASES 0x21 /* MsgDb_InitTable's entries */
+diff --git a/port/runtime/display/display.c b/port/runtime/display/display.c
+index 8b371c8..0bdfda2 100644
+--- a/port/runtime/display/display.c
++++ b/port/runtime/display/display.c
+@@ -47,7 +47,25 @@
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
++#if defined(KHDAYS_BROWSER)
++#include "../core/browser_counter.h"
++#include <sys/stat.h>
++#define MAX_PATH 260
++
++static void CreateDirectoryA(const char *path, void *security)
++{
++    (void)security;
++    (void)mkdir(path, 0777);
++}
++
++static int fopen_s(FILE **file, const char *path, const char *mode)
++{
++    *file = fopen(path, mode);
++    return *file == NULL;
++}
++#else
+ #include <windows.h>
++#endif
+ 
+ _Static_assert(KSI_3D_PROGRAMS == KHDAYS_RETICLE_COUNT + KHDAYS_HEART_PROGRAMS + KHDAYS_PRIZE_PROGRAMS,
+                "3D sequence package capacity");
+@@ -128,7 +146,11 @@ static void polygon_caller(const KhdaysG3dPolygon *p, const KhdaysG3dVertex *v)
+     fprintf(stderr, "display: 3D polygons from %s\n  first: x %.1f-%.1f y %.1f-%.1f, w %.0f-%.0f, attr %08x tex %08x\n",
+             chain, x0, x1, p->ymin, p->ymax, w0, w1, p->attr, p->tex);
+     if (chain_count < MAX_CHAINS) {
++#if defined(KHDAYS_BROWSER)
++        snprintf(chains[chain_count].chain, sizeof(chains[0].chain), "%s", chain);
++#else
+         strncpy_s(chains[chain_count].chain, sizeof(chains[0].chain), chain, _TRUNCATE);
++#endif
+         chains[chain_count++].polygons = 1;
+     }
+ }
+diff --git a/port/runtime/display/field_wipe.c b/port/runtime/display/field_wipe.c
+index ccb4be2..fc1a5c3 100644
+--- a/port/runtime/display/field_wipe.c
++++ b/port/runtime/display/field_wipe.c
+@@ -3,7 +3,11 @@
+ 
+ #include "../core/events.h"
+ 
++#if defined(KHDAYS_BROWSER)
++#include "../core/browser_counter.h"
++#else
+ #include <windows.h>
++#endif
+ 
+ extern void Ov002_TickSceneFadeIn(void);
+ extern void Ov002_TickSceneFadeOut(void);
+diff --git a/port/runtime/display/gfx_check.c b/port/runtime/display/gfx_check.c
+index c94b232..cfd43ad 100644
+--- a/port/runtime/display/gfx_check.c
++++ b/port/runtime/display/gfx_check.c
+@@ -6,7 +6,11 @@
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
++#if defined(KHDAYS_BROWSER)
++#include "../core/browser_counter.h"
++#else
+ #include <windows.h>
++#endif
+ 
+ #define FRAMES_WRITTEN 4 /* differing frames written out as pictures */
+ 
+diff --git a/port/runtime/movies/video.c b/port/runtime/movies/video.c
+index ebf698b..764d804 100644
+--- a/port/runtime/movies/video.c
++++ b/port/runtime/movies/video.c
+@@ -8,7 +8,11 @@
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
++#if defined(KHDAYS_BROWSER)
++#include "../core/browser_counter.h"
++#else
+ #include <windows.h>
++#endif
+ 
+ static LARGE_INTEGER decode_start, blit_start;
+ static LONGLONG decode_ticks, blit_ticks; /* QueryPerformanceCounter's */

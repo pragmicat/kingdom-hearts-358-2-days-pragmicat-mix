@@ -1,0 +1,340 @@
+diff --git a/port/runtime/core/diag.c b/port/runtime/core/diag.c
+index 470cc46..f3020a3 100644
+--- a/port/runtime/core/diag.c
++++ b/port/runtime/core/diag.c
+@@ -18,23 +18,34 @@
+ #include "window.h"
+ #include "io.h"
+ 
++#if !defined(KHDAYS_BROWSER)
+ /* the HAL's, in the rewritten game's data area */
+ #include "khdays_data_area.h"
+ static unsigned khdays_cpsr_value(void)
+ {
+     return *(const unsigned *)KHDAYS_W(KHDAYS_DATA_khdays_cpsr);
+ }
++#endif
+ 
+ #include <stdarg.h>
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
++#if defined(KHDAYS_BROWSER)
++#include <emscripten.h>
++#include <kh/kh_engine.h>
++#include "../plugins/interfaces.h"
++#else
+ #include <windows.h>
+ #include <dbghelp.h>
++#endif
+ 
++#if !defined(KHDAYS_BROWSER)
+ static HANDLE game_thread;
++#endif
+ static const char *symbol_name(const void *address);
+ 
++#if !defined(KHDAYS_BROWSER)
+ /* The instruction, stack and frame pointers of a thread's context, and the
+  * machine type DbgHelp walks it as. */
+ #define CONTEXT_PC(c) ((c)->Rip)
+@@ -482,6 +493,7 @@ void khdays_diag_init(void)
+         CreateThread(NULL, 0, watchdog, (void *)(size_t)atoi(stall), 0, NULL);
+     }
+ }
++#endif
+ 
+ /* printf to stderr, for a temporary hook in the game's C (prepare.py HOOKS). */
+ void khdays_debugf(const char *format, ...)
+@@ -493,6 +505,68 @@ void khdays_debugf(const char *format, ...)
+     fflush(stderr);
+ }
+ 
++#if defined(KHDAYS_BROWSER)
++void khdays_diag_stack(void)
++{
++    emscripten_log(EM_LOG_ERROR | EM_LOG_C_STACK | EM_LOG_NO_PATHS, "Days runtime stack");
++}
++
++unsigned long long khdays_diag_symbol(const char *name)
++{
++    const KhEngine *engine = khdays_plugins_engine();
++    return (uintptr_t)engine->routine(name, NULL);
++}
++
++static const char *symbol_name(const void *address)
++{
++    static char name[32];
++    if (address == NULL) {
++        return "-";
++    }
++    snprintf(name, sizeof(name), "wasm@%p", address);
++    return name;
++}
++
++const char *khdays_diag_function_at(const void *address)
++{
++    return symbol_name(address);
++}
++
++void khdays_diag_callers(char *out, int size, int skip)
++{
++    char stack[4096];
++    if (out == NULL || size <= 0) {
++        return;
++    }
++    out[0] = '\0';
++    if (emscripten_get_callstack(EM_LOG_C_STACK | EM_LOG_NO_PATHS, stack, sizeof(stack)) <= 0) {
++        return;
++    }
++    const char *line = stack;
++    /* Drop this function's frame and the additional callers requested. */
++    for (int i = 0; i <= skip && *line; ++i) {
++        const char *end = strchr(line, '\n');
++        line = end != NULL ? end + 1 : line + strlen(line);
++    }
++    size_t used = 0;
++    while (*line && used < (size_t)size - 1) {
++        while (*line == ' ' || *line == '\t') {
++            ++line;
++        }
++        const char *end = strchr(line, '\n');
++        const size_t len = end != NULL ? (size_t)(end - line) : strlen(line);
++        if (len != 0) {
++            int written = snprintf(out + used, (size_t)size - used, "%s%.*s",
++                                   used != 0 ? " < " : "", (int)len, line);
++            if (written < 0 || (size_t)written >= (size_t)size - used) {
++                return;
++            }
++            used += (size_t)written;
++        }
++        line += len + (end != NULL);
++    }
++}
++#else
+ void khdays_diag_stack(void)
+ {
+     CONTEXT context;
+@@ -557,6 +631,7 @@ void khdays_diag_callers(char *out, int size, int skip)
+         strncat_s(out, (size_t)size, symbol_name(frames[i]), _TRUNCATE);
+     }
+ }
++#endif
+ 
+ /* KHDAYS_TRACE_SCRIPT: prints each step of the action-script interpreter (func_02020e58) that differs
+  * from the last: the command (opcode, sub-op, length), its action and its five callbacks. */
+@@ -626,10 +701,14 @@ void khdays_check_update(int fn, int next)
+ 
+ static void check_update(intptr_t fn, intptr_t next)
+ {
++#if !defined(KHDAYS_BROWSER)
+     extern char __ImageBase;
++#endif
+     static int trace = -1;
++#if !defined(KHDAYS_BROWSER)
+     const IMAGE_NT_HEADERS *nt;
+     const u8 *base = (const u8 *)&__ImageBase;
++#endif
+     khdays_input_update_ran((khdays_uptr)fn);
+     khdays_cinelist_update_ran((khdays_uptr)fn);
+     khdays_daycard_update_ran((khdays_uptr)fn);
+@@ -681,6 +760,7 @@ static void check_update(intptr_t fn, intptr_t next)
+         fprintf(stderr, "update %s -> ", symbol_name((const void *)fn));
+         fprintf(stderr, "%s\n", next == -1 ? "idle" : next == -2 ? "destroy" : symbol_name((const void *)next));
+     }
++#if !defined(KHDAYS_BROWSER)
+     if (next == 0 || next == -1 || next == -2) {
+         return;
+     }
+@@ -694,4 +774,5 @@ static void check_update(intptr_t fn, intptr_t next)
+             symbol_name((const void *)fn), (u32)next);
+     fflush(stderr);
+     exit(12);
++#endif
+ }
+diff --git a/port/runtime/core/runtime.c b/port/runtime/core/runtime.c
+index 2bc4da1..d096cca 100644
+--- a/port/runtime/core/runtime.c
++++ b/port/runtime/core/runtime.c
+@@ -56,9 +56,12 @@ int khdays_runtime_init(int argc, char **argv)
+     }
+     khdays_boot_environment();
+     khdays_io_reset();
++#if !defined(KHDAYS_BROWSER)
+     khdays_io_guard_init();
++#endif
+     khdays_threads_init();
+     khdays_clock_init();
++#if !defined(KHDAYS_BROWSER)
+     if (getenv("KHDAYS_TEST_IPC") != NULL) {
+         /* an IPC register read at its DS address, as a game access the port does not reach: the guard stops
+          * the game, naming it (io_guard.c) */
+@@ -69,6 +72,7 @@ int khdays_runtime_init(int argc, char **argv)
+          * the game, naming it */
+         (void)*(volatile u32 *)0x02000000;
+     }
++#endif
+     return 1;
+ }
+ 
+diff --git a/port/runtime/core/start.c b/port/runtime/core/start.c
+index cff6c07..6d62be0 100644
+--- a/port/runtime/core/start.c
++++ b/port/runtime/core/start.c
+@@ -12,7 +12,9 @@
+ #include "../sound/sound_bridge.h"
+ #include "threads.h"
+ #include "khdays_data_area.h" /* the data area's bounds (build/port/gen-x64) */
++#if !defined(KHDAYS_BROWSER)
+ #include "../sound/sound_dump.h"
++#endif
+ #include "../mods/list.h"
+ #include "../mods/names.h"
+ #include "../characters/characters.h"
+@@ -26,11 +28,15 @@
+ #include "../../host/app/instance.h"
+ #include "../../host/app/host.h"
+ 
++#if !defined(KHDAYS_BROWSER)
+ #include <SDL3/SDL.h>
++#endif
+ 
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
++
++#if !defined(KHDAYS_BROWSER)
+ #include <windows.h>
+ #ifdef _WIN32
+ #include <direct.h>
+@@ -42,6 +48,8 @@
+ 
+ extern int khdays_export_heart_model(const char *input, const char *output);
+ extern int khdays_export_kh2_object(int argc, char **argv); /* tools/kh2_object_export.cpp */
++#endif
++
+ extern void khdays_NitroMain(void);                         /* the decomp's main, renamed at build */
+ extern void _fp_init(void);
+ extern void NitroStartUp(void);
+@@ -169,6 +177,7 @@ void khdays_reset_system(u32 parameter)
+     khdays_hal_unimplemented("a thread of the game that reset ran again");
+ }
+ 
++#if !defined(KHDAYS_BROWSER)
+ /* Which folder the port works in, said again in the session log once it is open. */
+ static char working_folder_note[1024];
+ 
+@@ -215,6 +224,7 @@ static void attach_parent_console(void)
+             (void)freopen_s(&f, "CONIN$", "r", stdin);
+     }
+ }
++#endif
+ 
+ /* A native plugin's line (runtime/plugins/plugins.h): in the mods' log, which also writes it to the session log. */
+ static void plugin_said(const char *mod_id, const char *text)
+@@ -246,6 +256,7 @@ int main(int argc, char **argv)
+     if (!khdays_memory_map()) {
+         return 1;
+     }
++#if !defined(KHDAYS_BROWSER)
+     attach_parent_console();
+     take_working_folder();
+     khdays_diag_init();
+@@ -276,6 +287,7 @@ int main(int argc, char **argv)
+         /* Headless: a KH2 object of the player's collection made into a glTF model (the KH2 prizes mod) */
+         return khdays_export_kh2_object(argc - 2, argv + 2);
+     }
++#endif
+     /* this copy's player slot: a further copy on the PC is player N, with its own save, settings, logs
+      * and gamepad (host/app/instance.h) */
+     khdays_host_player_slot();
+@@ -285,13 +297,22 @@ int main(int argc, char **argv)
+         return 1;
+     }
+     khdays_log_open();
++#if defined(KHDAYS_BROWSER)
++    /* The browser launcher selects the profile before calling main. Its
++     * read-only authored mod files are compiled alongside the built-in table. */
++    khdays_log("working folder: the browser's selected profile");
++    khdays_plugins_set_native_code(1);
++#else
+     khdays_log("%s", working_folder_note);
++#endif
+     khdays_missions_report();
+     khdays_characters_report();
+     khdays_plugins_set_safe_mode(safe_mode(argc, argv));
+     khdays_plugins_mods_on(khdays_mods_started_has);
+     khdays_plugins_start("mods", plugin_said);
++#if !defined(KHDAYS_BROWSER)
+     khdays_log("the game's memory at %p (its references from there)", (void *)khdays_window);
++#endif
+     {
+         /* The game runs on a context whose stack is in its memory (memory.c), so its locals are reached
+          * by reference too. */
+diff --git a/port/runtime/plugins/plugins.c b/port/runtime/plugins/plugins.c
+index e0c5fc8..2297be6 100644
+--- a/port/runtime/plugins/plugins.c
++++ b/port/runtime/plugins/plugins.c
+@@ -75,7 +75,9 @@ static KhPluginQuery built_in_query(const char *mod_id)
+ 
+ const char *khdays_plugins_platform(void)
+ {
+-#if defined(_WIN32) && (defined(_M_X64) || defined(__x86_64__))
++#if defined(KHDAYS_BROWSER)
++    return "browser-wasm";
++#elif defined(_WIN32) && (defined(_M_X64) || defined(__x86_64__))
+     return "windows-x64";
+ #elif defined(__linux__) && defined(__x86_64__)
+     return "linux-x64";
+@@ -420,6 +422,10 @@ static void found(const char *folder_name, void *context)
+             set_why(p, KHDAYS_PLUGIN_REFUSED, why);
+         } else if (p->built_in != NULL) {
+             /* built into the port: its library, if the mod has one, is not loaded */
++#if defined(KHDAYS_BROWSER)
++        } else {
++            set_why(p, KHDAYS_PLUGIN_REFUSED, "browser sessions use only built-in native plugins");
++#else
+         } else if (library == NULL) {
+             snprintf(why, sizeof(why), "no library for %s (mod.ini: %s)", khdays_plugins_platform(), key);
+             set_why(p, KHDAYS_PLUGIN_REFUSED, why);
+@@ -429,6 +435,7 @@ static void found(const char *folder_name, void *context)
+         } else if ((p->path = joined(folder, library)) == NULL || !khdays_folders_is_file(p->path)) {
+             snprintf(why, sizeof(why), "%.200s is not there", library);
+             set_why(p, KHDAYS_PLUGIN_REFUSED, why);
++#endif
+         }
+     }
+ done:
+@@ -578,10 +585,14 @@ static int requirements(const char *mods, const Plugin *p, char *why, size_t why
+ /* Its library let go (a built-in plugin has none). */
+ static void release(Plugin *p)
+ {
++#if defined(KHDAYS_BROWSER)
++    (void)p;  /* Built-in plugins do not own a dynamically loaded object. */
++#else
+     if (p->object != NULL) {
+         SDL_UnloadObject(p->object);
+         p->object = NULL;
+     }
++#endif
+ }
+ 
+ static void load(Plugin *p)
+@@ -593,6 +604,10 @@ static void load(Plugin *p)
+     if (p->built_in != NULL) {
+         query = p->built_in;
+     } else {
++#if defined(KHDAYS_BROWSER)
++        set_why(p, KHDAYS_PLUGIN_REFUSED, "browser sessions use only built-in native plugins");
++        return;
++#else
+         p->object = SDL_LoadObject(p->path);
+         if (p->object == NULL) {
+             snprintf(why, sizeof(why), "its library cannot be loaded (%.200s)", SDL_GetError());
+@@ -600,6 +615,7 @@ static void load(Plugin *p)
+             return;
+         }
+         query = (KhPluginQuery)SDL_LoadFunction(p->object, KH_PLUGIN_QUERY);
++#endif
+     }
+     d = query != NULL ? query() : NULL;
+     if (d == NULL || d->size < offsetof(KhPluginDescriptor, stop) + sizeof(d->stop) || d->start == NULL ||

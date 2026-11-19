@@ -1,0 +1,12 @@
+{
+  "commit": "2037f79a171524eafcf40a1d641b16da14667a64",
+  "sha256": {
+    "port/host/app/host.h": "003ec170b101d54247eb119016cd384aec26b6496724ae228891f6c188e2c2bf",
+    "port/host/app/press_edges.h": "34234f4f37aecbb0ffde83629b8c5071b57831e5090ff46629233a876ac5a010",
+    "port/host/app/instance.h": "29a3e0e880c24f5db11f3dadd47fbbff4656cad7810c0a22d51560fa393c2594",
+    "port/runtime/core/clock.h": "dca0a481bdcf6e19bafc233e317d0ee6b0feaf45d612b4f9c59abe869b68db02",
+    "port/hal/hal.h": "0e6cd151c288fd8b743bb171d4616ff4b45c53276b29f69fdb912078ddb7694e",
+    "port/host/app/profile.h": "bc17a16c6fc6b9f641ec2368376987295ba080c43aa534e041c40fd4400b4571",
+    "port/host/app/hud_settings.h": "423ad4f9b00a9925eaf09a1b123b8e1d699b20321aff4789ede3eb3ee93d43e2"
+  }
+}

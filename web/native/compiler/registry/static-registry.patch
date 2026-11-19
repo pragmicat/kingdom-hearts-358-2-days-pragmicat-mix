@@ -1,0 +1,293 @@
+--- a/port/compat/khdays_references.h
++++ b/port/compat/khdays_references.h
+@@ -36,6 +36,9 @@
+ 
+ /* A function reference the build numbers (one with no DS address: a static
+  * function, the port's), and its native function: in section .khfr$m. */
++#if defined(KHDAYS_BROWSER_STATIC_REGISTRY)
++#include "static_registry.h"
++#else
+ #pragma pack(push, 8) /* as runtime/core/window.c reads them, whatever the files' packing */
+ struct khdays_function_record {
+     khdays_ref reference;
+@@ -53,6 +56,7 @@
+     void *unused; /* 32 bytes: whatever alignment the linker gives the section, no record straddles its padding */
+ };
+ #pragma pack(pop)
++#endif
+ 
+ /* A member's offset, without <stddef.h> (whose size_t is not the game's). */
+ #define KHDAYS_OFFSETOF(type, member) ((khdays_ref)(unsigned long long)&(((type *)0)->member))
+--- a/port/runtime/core/window.c
++++ b/port/runtime/core/window.c
+@@ -53,6 +53,10 @@
+ 
+ /* The function references the build numbered: one record each in section .khfr$m
+  * (compat/khdays_references.h), sorted by reference the first time one is called. */
++#if defined(KHDAYS_BROWSER_STATIC_REGISTRY)
++#include "../../compat/static_registry.h"
++typedef struct khdays_function_record FunctionRecord;
++#else
+ typedef struct {
+     KhdaysRef reference;
+     khdays_function_pointer function;
+@@ -62,6 +66,7 @@
+ #pragma section(".khfr$z", read)
+ __declspec(allocate(".khfr$a")) static const FunctionRecord first_function = {0, 0};
+ __declspec(allocate(".khfr$z")) static const FunctionRecord last_function = {0, 0};
++#endif
+ 
+ static FunctionRecord *numbered;
+ static size_t numbered_count;
+@@ -74,15 +79,24 @@
+ 
+ static void sort_numbered(void)
+ {
++#if defined(KHDAYS_BROWSER_STATIC_REGISTRY)
++    const size_t n = khdays_static_function_count;
++#else
+     size_t n = 0;
+     for (const FunctionRecord *r = &first_function + 1; r < &last_function; ++r) {
+         n += r->function != NULL;
+     }
++#endif
+     numbered = (FunctionRecord *)malloc((n ? n : 1) * sizeof(FunctionRecord));
+     if (numbered == NULL) {
+         khdays_hal_unimplemented("no memory for the function references' table");
+     }
++#if defined(KHDAYS_BROWSER_STATIC_REGISTRY)
++    for (size_t i = 0; i < khdays_static_function_count; ++i) {
++        const FunctionRecord *r = khdays_static_functions[i];
++#else
+     for (const FunctionRecord *r = &first_function + 1; r < &last_function; ++r) {
++#endif
+         if (r->function != NULL) {
+             numbered[numbered_count++] = *r;
+         }
+--- a/port/runtime/core/data_init.c
++++ b/port/runtime/core/data_init.c
+@@ -8,10 +8,14 @@
+ 
+ #include <string.h>
+ 
++#if defined(KHDAYS_BROWSER_STATIC_REGISTRY)
++#include "../../compat/static_registry.h"
++#else
+ #pragma section(".khdi$a", read, write)
+ #pragma section(".khdi$z", read, write)
+ __declspec(allocate(".khdi$a")) static struct khdays_data_init first_marker = {0, 0, 0, 0};
+ __declspec(allocate(".khdi$z")) static struct khdays_data_init last_marker = {0, 0, 0, 0};
++#endif
+ 
+ void khdays_overlay_started(int id);
+ 
+@@ -20,7 +24,12 @@
+     if (module >= 0) {
+         khdays_overlay_started(module); /* an overlay: FS_StartOverlay (prepare.py HOOKS) */
+     }
++#if defined(KHDAYS_BROWSER_STATIC_REGISTRY)
++    for (size_t i = 0; i < khdays_static_data_count; ++i) {
++        const struct khdays_data_init *entry = khdays_static_data[i];
++#else
+     for (const struct khdays_data_init *entry = &first_marker + 1; entry < &last_marker; ++entry) {
++#endif
+         if (entry->address != 0 && entry->module == module) {
+             memcpy(KHDAYS_W(entry->address), entry->init, entry->size);
+         }
+--- a/port/runtime/plugins/engine.c
++++ b/port/runtime/plugins/engine.c
+@@ -97,6 +97,10 @@
+ 
+ /* The game's routines a plugin may replace: one record each in section .khrt$m (compat/khdays_references.h,
+  * references/emit.py routed), sorted by name the first time one is asked for. */
++#if defined(KHDAYS_BROWSER_STATIC_REGISTRY)
++#include "../../compat/static_registry.h"
++typedef struct khdays_route_record RouteRecord;
++#else
+ typedef struct {
+     const char *name;
+     void **route;
+@@ -108,6 +112,7 @@
+ #pragma section(".khrt$z", read)
+ __declspec(allocate(".khrt$a")) static const RouteRecord first_route = {0};
+ __declspec(allocate(".khrt$z")) static const RouteRecord last_route = {0};
++#endif
+ 
+ static RouteRecord *routes;
+ static size_t route_count;
+@@ -120,15 +125,24 @@
+ static const RouteRecord *route_named(const char *name)
+ {
+     if (routes == NULL) {
++#if defined(KHDAYS_BROWSER_STATIC_REGISTRY)
++        const size_t n = khdays_static_route_count;
++#else
+         size_t n = 0;
+         for (const RouteRecord *r = &first_route + 1; r < &last_route; ++r) {
+             n += r->name != NULL;
+         }
++#endif
+         routes = malloc((n ? n : 1) * sizeof(RouteRecord));
+         if (routes == NULL) {
+             return NULL;
+         }
++#if defined(KHDAYS_BROWSER_STATIC_REGISTRY)
++        for (size_t i = 0; i < khdays_static_route_count; ++i) {
++            const RouteRecord *r = khdays_static_routes[i];
++#else
+         for (const RouteRecord *r = &first_route + 1; r < &last_route; ++r) {
++#endif
+             if (r->name != NULL) {
+                 routes[route_count++] = *r;
+             }
+--- /dev/null
++++ b/port/compat/static_registry.h
+@@ -0,0 +1,43 @@
++/* Explicit metadata tables for builds without Windows COFF enumeration.
++ * The original records stay in their owning translation units, retaining the
++ * linkage of their initializer, function and typed route targets. */
++#ifndef KHDAYS_STATIC_REGISTRY_H
++#define KHDAYS_STATIC_REGISTRY_H
++
++#include <stddef.h>
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++/* Defined by decomp_compat.h and retained in rewritten C. Forward declaration
++ * here avoids defining that emitted host structure twice. */
++struct khdays_data_init;
++
++#pragma pack(push, 8)
++struct khdays_function_record {
++    unsigned int reference;
++    void (*function)(void);
++};
++struct khdays_route_record {
++    const char *name;
++    void **route;
++    void *body;
++    void *unused;
++};
++#pragma pack(pop)
++
++/* Empty registries have one physical NULL slot and an explicit zero count.
++ * Arrays always point to the actual named record types, without layout casts. */
++extern const struct khdays_data_init *const khdays_static_data[];
++extern const size_t khdays_static_data_count;
++extern const struct khdays_function_record *const khdays_static_functions[];
++extern const size_t khdays_static_function_count;
++extern const struct khdays_route_record *const khdays_static_routes[];
++extern const size_t khdays_static_route_count;
++
++#ifdef __cplusplus
++}
++#endif
++
++#endif
+--- /dev/null
++++ b/port/tools/static_registry.py
+@@ -0,0 +1,102 @@
++#!/usr/bin/env python3
++"""Emit typed metadata tables after all game C has been rewritten.
++
++Targets stay behind the original globally visible records in their owning TUs;
++private initializer/function targets never need new external linkage. Source
++and declaration order is retained, including overlapping data initializers.
++"""
++from __future__ import annotations
++
++import argparse
++from dataclasses import dataclass
++from pathlib import Path
++import re
++from typing import Iterable
++
++
++NOISE = re.compile(r'//[^\n]*|/\*.*?\*/|"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'', re.DOTALL)
++RECORD = re.compile(
++    r"\b(?P<const>const\s+)?struct\s+"
++    r"(?P<kind>khdays_data_init|khdays_function_record|khdays_route_record)\s+"
++    r"(?P<symbol>[A-Za-z_][A-Za-z_0-9]*)\s*=\s*\{"
++)
++KINDS = {
++    "khdays_data_init": ("data", "data", False),
++    "khdays_function_record": ("functions", "function", True),
++    "khdays_route_record": ("routes", "route", True),
++}
++
++
++@dataclass(frozen=True)
++class Record:
++    kind: str
++    symbol: str
++    source: Path
++
++
++def records_in(source: Path) -> list[Record]:
++    text = source.read_text(encoding="utf-8")
++    clean = NOISE.sub(lambda match: "\n" * match.group().count("\n") + " ", text)
++    found = []
++    depth = 0
++    previous = 0
++    for match in RECORD.finditer(clean):
++        before = clean[previous:match.start()]
++        depth += before.count("{") - before.count("}")
++        if depth != 0:
++            raise ValueError(f"{source}: metadata {match['symbol']} must be globally defined")
++        prefix = before[max(before.rfind(";"), before.rfind("}")) + 1:]
++        if re.search(r"\bstatic\b", prefix):
++            raise ValueError(f"{source}: metadata {match['symbol']} must have external linkage")
++        kind = match["kind"]
++        if bool(match["const"]) != KINDS[kind][2]:
++            qualifier = "const" if KINDS[kind][2] else "mutable"
++            raise ValueError(f"{source}: metadata {match['symbol']} must use its emitted {qualifier} type")
++        found.append(Record(kind, match["symbol"], source))
++        previous = match.end() - 1  # include this initializer's opening brace next time
++    return found
++
++
++def write_registry(sources: Iterable[str | Path], output: str | Path) -> Path:
++    """Write/return C to append to the complete current rewritten source list.
++
++    Use the exact ordered build list, never a directory glob that could include
++    stale output. Retain every original metadata record; repeated numeric
++    function references from different TUs are legitimate.
++    """
++    output = Path(output)
++    paths = list(dict.fromkeys(Path(source).resolve() for source in sources))
++    records: dict[str, Record] = {}
++    for source in paths:
++        if source == output.resolve():
++            raise ValueError("the generated registry cannot be its own input")
++        for record in records_in(source):
++            if record.symbol in records:
++                raise ValueError(f"duplicate metadata symbol {record.symbol}: {records[record.symbol].source}, {source}")
++            records[record.symbol] = record
++    lines = [
++        "/* Generated by port/tools/static_registry.py from the complete ordered rewritten source list. */",
++        '#include "static_registry.h"',
++        "",
++    ]
++    for record in sorted(records.values(), key=lambda item: item.symbol):
++        qualifier = "const " if KINDS[record.kind][2] else ""
++        lines.append(f"extern {qualifier}struct {record.kind} {record.symbol};")
++    for kind, (plural, singular, _) in KINDS.items():
++        names = [record.symbol for record in records.values() if record.kind == kind]
++        lines += ["", f"const struct {kind} *const khdays_static_{plural}[] = {{"]
++        lines += [f"    &{name}," for name in names] if names else ["    NULL,"]
++        lines += ["};", f"const size_t khdays_static_{singular}_count = {len(names)}u;"]
++    text = "\n".join(lines) + "\n"
++    output.parent.mkdir(parents=True, exist_ok=True)
++    if not output.exists() or output.read_text(encoding="utf-8") != text:
++        output.write_text(text, encoding="utf-8", newline="\n")
++    return output
++
++
++if __name__ == "__main__":
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument("--out", type=Path, required=True)
++    parser.add_argument("sources", nargs="*", type=Path)
++    args = parser.parse_args()
++    print(write_registry(args.sources, args.out))

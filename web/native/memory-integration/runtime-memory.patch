@@ -1,0 +1,551 @@
+diff --git a/port/compat/khdays_references.h b/port/compat/khdays_references.h
+index 6fe208f..2b468b0 100644
+--- a/port/compat/khdays_references.h
++++ b/port/compat/khdays_references.h
+@@ -10,7 +10,12 @@ typedef unsigned int khdays_ref;
+
+ /* The host address of reference 0 (runtime/core/window.c). */
+ extern unsigned char *khdays_window;
++#if defined(KHDAYS_BROWSER_MEMORY)
++void *khdays_window_address(khdays_ref reference);
++#define KHDAYS_W(reference) khdays_window_address((khdays_ref)(reference))
++#else
+ #define KHDAYS_W(reference) ((void *)(khdays_window + (khdays_ref)(reference)))
++#endif
+
+ /* A host address in the window as a reference (stops the game, naming the
+  * caller, when it is not in it) -- what the port's side hands the game. */
+@@ -27,7 +32,7 @@ khdays_function_pointer khdays_function(khdays_ref reference);
+  * function reference as its native function -- 0 as NULL either way. */
+ static __inline void *khdays_host(khdays_ref reference)
+ {
+-    return reference ? (void *)(khdays_window + reference) : (void *)0;
++    return reference ? KHDAYS_W(reference) : (void *)0;
+ }
+ static __inline khdays_function_pointer khdays_host_function(khdays_ref reference)
+ {
+diff --git a/port/runtime/core/game_heap.c b/port/runtime/core/game_heap.c
+index 9aeb253..fb8aee7 100644
+--- a/port/runtime/core/game_heap.c
++++ b/port/runtime/core/game_heap.c
+@@ -172,12 +172,16 @@ static int which_heap(KhdaysRef handle)
+
+ int khdays_game_heap_ds_memory(void)
+ {
++#if defined(KHDAYS_BROWSER_MEMORY)
++    return 1; /* Both heaps use the mapped DS main arena in the browser. */
++#else
+     static int ds = -1;
+     if (ds < 0) {
+         const char *value = getenv("KHDAYS_DS_MEMORY");
+         ds = value != NULL && value[0] != '\0' && value[0] != '0';
+     }
+     return ds;
++#endif
+ }
+
+ void *khdays_game_heap(int which, unsigned int ds_size)
+diff --git a/port/runtime/core/memory.c b/port/runtime/core/memory.c
+index 35c4b0b..3890e5d 100644
+--- a/port/runtime/core/memory.c
++++ b/port/runtime/core/memory.c
+@@ -1,3 +1,6 @@
++#if defined(KHDAYS_BROWSER_MEMORY)
++#include "memory_browser.inc"
++#else
+ /* The DS's ARM9 address space in the game's memory window (window.h): each region at the window's start
+  * plus its DS address, rounded out to 64 KB; the rest inaccessible, the null range among it. The map:
+  * docs/PLATFORM.md, "Memory". */
+@@ -389,3 +392,5 @@ int khdays_memory_map(void)
+     khdays_io2_host = at(KHDAYS_IO2_VIEW);
+     return 1;
+ }
++
++#endif /* KHDAYS_BROWSER_MEMORY */
+diff --git a/port/runtime/core/memory_browser.inc b/port/runtime/core/memory_browser.inc
+new file mode 100644
+index 0000000..a73c0e6
+--- /dev/null
++++ b/port/runtime/core/memory_browser.inc
+@@ -0,0 +1,245 @@
++/* Emscripten has one linear address space. Keep a compact table of the
++ * recompilation's DS ranges and allocate only their backing stores. Aliases
++ * share their canonical RAM allocation. The DS-mode heaps stay in main RAM. */
++#include "enemy_overlays.h"
++#include "io.h"
++#include "runtime.h"
++#include "window.h"
++#include "../../host/app/context.h"
++#include "khdays_data_area.h"
++
++#include <stdint.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++
++#define GRANULE 0x10000u
++#define MAIN_RAM 0x02000000u
++#define MAIN_RAM_SIZE 0x400000u
++#define DTCM_BASE 0x027e0000u
++#define STACKS_BASE 0x0c000000u
++#define STACKS_END 0x1c000000u
++#define MAX_RANGES (32u + (STACKS_END - STACKS_BASE) / (2u * GRANULE))
++
++typedef struct {
++    unsigned base, size;
++    unsigned char *host;
++    int alias;
++    int stack;
++    int released;
++} MemoryRange;
++
++static MemoryRange ranges[MAX_RANGES];
++static MemoryRange *pages[STACKS_END / GRANULE];
++static unsigned range_count;
++static unsigned stacks_next = STACKS_BASE;
++static int mapped;
++
++u8 *khdays_io_host;
++u8 *khdays_io2_host;
++
++void *khdays_window_range(KhdaysRef reference, size_t size)
++{
++    if (size == 0 || reference >= STACKS_END) {
++        return NULL;
++    }
++    const MemoryRange *range = pages[reference / GRANULE];
++    if (range == NULL || range->released) {
++        return NULL;
++    }
++    const unsigned offset = reference - range->base;
++    return size <= range->size - offset ? range->host + offset : NULL;
++}
++
++void *khdays_window_address(KhdaysRef reference)
++{
++    void *host = khdays_window_range(reference, 1);
++    if (host == NULL) {
++        fprintf(stderr, "browser memory: unmapped DS address 0x%08x\n", reference);
++        abort();
++    }
++    return host;
++}
++
++int khdays_window_try_reference(const void *host, KhdaysRef *reference)
++{
++    *reference = 0;
++    if (host == NULL) {
++        return 1;
++    }
++    const uintptr_t address = (uintptr_t)host;
++    for (unsigned i = 0; i < range_count; ++i) {
++        const MemoryRange *range = &ranges[i];
++        const uintptr_t start = (uintptr_t)range->host;
++        if (!range->alias && !range->released && address >= start && address - start < range->size) {
++            *reference = range->base + (unsigned)(address - start);
++            return 1;
++        }
++    }
++    return 0;
++}
++
++static int free_span(unsigned base, unsigned size)
++{
++    if (base == 0 || size == 0 || base >= STACKS_END || size > STACKS_END - base ||
++        base % GRANULE != 0 || size % GRANULE != 0 || range_count == MAX_RANGES) {
++        return 0;
++    }
++    for (unsigned page = base / GRANULE; page < (base + size) / GRANULE; ++page) {
++        if (pages[page] != NULL) {
++            return 0;
++        }
++    }
++    return 1;
++}
++
++static MemoryRange *install(unsigned base, unsigned size, unsigned char *host, int alias)
++{
++    MemoryRange *range = &ranges[range_count++];
++    *range = (MemoryRange){.base = base, .size = size, .host = host, .alias = alias};
++    for (unsigned page = base / GRANULE; page < (base + size) / GRANULE; ++page) {
++        pages[page] = range;
++    }
++    return range;
++}
++
++/* Match the native Windows plain() alignment and preserve its padding. */
++static MemoryRange *plain(unsigned base, unsigned size)
++{
++    const uint64_t end = ((uint64_t)base + size + GRANULE - 1) & ~(uint64_t)(GRANULE - 1);
++    base &= ~(GRANULE - 1);
++    if (end > STACKS_END || end <= base || !free_span(base, (unsigned)(end - base))) {
++        return NULL;
++    }
++    size = (unsigned)(end - base);
++    /* Emscripten malloc need not satisfy the context adapter's 16-byte alignment. */
++    unsigned char *host = aligned_alloc(16, size);
++    if (host == NULL) {
++        return NULL;
++    }
++    memset(host, 0, size);
++    return install(base, size, host, 0);
++}
++
++static int mirror(unsigned base, unsigned canonical, unsigned size)
++{
++    unsigned char *storage = khdays_window_range(canonical, size);
++    if (storage == NULL || !free_span(base, size)) {
++        return 0;
++    }
++    install(base, size, storage, 1);
++    return 1;
++}
++
++static unsigned rounded_stack_size(size_t size)
++{
++    if (size == 0 || size > STACKS_END - STACKS_BASE - GRANULE) {
++        return 0;
++    }
++    return ((unsigned)size + GRANULE - 1) & ~(GRANULE - 1);
++}
++
++static void *window_stack(size_t size)
++{
++    const unsigned rounded = rounded_stack_size(size);
++    if (rounded == 0) {
++        return NULL;
++    }
++    for (unsigned i = 0; i < range_count; ++i) {
++        MemoryRange *range = &ranges[i];
++        if (range->stack && range->released && range->size == rounded) {
++            range->released = 0;
++            return range->host;
++        }
++    }
++    /* Preserve an unmapped DS granule under each stack. In Wasm this is a
++     * translation check, not a host guard page. */
++    if (STACKS_END - stacks_next < GRANULE + rounded) {
++        return NULL;
++    }
++    MemoryRange *range = plain(stacks_next + GRANULE, rounded);
++    if (range == NULL) {
++        return NULL;
++    }
++    range->stack = 1;
++    stacks_next = range->base + range->size;
++    return range->host;
++}
++
++static void window_stack_release(void *stack, size_t size)
++{
++    const unsigned rounded = rounded_stack_size(size);
++    for (unsigned i = 0; i < range_count; ++i) {
++        MemoryRange *range = &ranges[i];
++        if (range->stack && !range->released && range->host == stack && range->size == rounded) {
++            range->released = 1;
++            return;
++        }
++    }
++    fprintf(stderr, "browser memory: unowned or duplicate context stack release\n");
++    abort();
++}
++
++void khdays_memory_unmap(void)
++{
++    khdays_context_stack_source(NULL, NULL);
++    for (unsigned i = 0; i < range_count; ++i) {
++        if (!ranges[i].alias) {
++            free(ranges[i].host);
++        }
++    }
++    memset(pages, 0, sizeof(pages));
++    range_count = 0;
++    stacks_next = STACKS_BASE;
++    khdays_io_host = khdays_io2_host = NULL;
++    mapped = 0;
++}
++
++unsigned long long khdays_heaps_committed(void)
++{
++    return 0; /* The expanded PC heaps are not mapped. */
++}
++
++int khdays_heaps_touched(KhdaysRef reference, unsigned *rest)
++{
++    *rest = GRANULE - reference % GRANULE;
++    return 0;
++}
++
++void khdays_heaps_reset(void)
++{
++    /* The reset path clears the DS main RAM where both browser heaps live. */
++}
++
++int khdays_memory_map(void)
++{
++    if (mapped) {
++        return 1;
++    }
++    if (!(plain(MAIN_RAM, MAIN_RAM_SIZE) &&
++          mirror(0x02400000u, MAIN_RAM, DTCM_BASE - 0x02400000u) &&
++          mirror(0x027f0000u, 0x023f0000u, GRANULE) &&
++          mirror(0x02800000u, MAIN_RAM, MAIN_RAM_SIZE) &&
++          mirror(0x02c00000u, MAIN_RAM, MAIN_RAM_SIZE) &&
++          plain(0x01ff8000u, 0x8000u) && plain(DTCM_BASE, 0x4000u) &&
++          plain(0x03000000u, 0x8000u) && plain(0x037f8000u, 0x18000u) &&
++          plain(0x05000000u, 0x800u) && plain(0x06000000u, 0x008a4000u) &&
++          plain(0x07000000u, 0x800u) && plain(0x08000000u, GRANULE) &&
++          mirror(0x0a000000u, 0x08000000u, GRANULE) &&
++          plain(KHDAYS_IO_VIEW, KHDAYS_IO_SIZE + KHDAYS_IO2_SIZE) &&
++          (KHDAYS_DATA_AREA_END == KHDAYS_DATA_AREA ||
++           plain(KHDAYS_DATA_AREA, KHDAYS_DATA_AREA_END - KHDAYS_DATA_AREA)) &&
++          plain(KHDAYS_ENEMY_OVERLAYS,
++                (KHDAYS_ENEMY_OVERLAY_LAST - KHDAYS_ENEMY_OVERLAY_FIRST + 1) * KHDAYS_ENEMY_OVERLAY_SPAN) &&
++          plain(KHDAYS_ENEMY_HANDLERS, KHDAYS_ENEMY_SLOTS_END - KHDAYS_ENEMY_HANDLERS))) {
++        khdays_memory_unmap();
++        fprintf(stderr, "browser memory: could not allocate the native DS memory layout\n");
++        return 0;
++    }
++    memset(KHDAYS_W(0x08000000u), 0xff, GRANULE);
++    khdays_io_host = KHDAYS_W(KHDAYS_IO_VIEW);
++    khdays_io2_host = KHDAYS_W(KHDAYS_IO2_VIEW);
++    khdays_context_stack_source(window_stack, window_stack_release);
++    mapped = 1;
++    return 1;
++}
+diff --git a/port/runtime/core/window.c b/port/runtime/core/window.c
+index 737128a..9044e5a 100644
+--- a/port/runtime/core/window.c
++++ b/port/runtime/core/window.c
+@@ -8,7 +8,9 @@
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
++#if !defined(KHDAYS_BROWSER_MEMORY)
+ #include <windows.h>
++#endif
+
+ unsigned char *khdays_window;
+
+@@ -19,7 +21,11 @@ static void stop(const char *what, unsigned long long value, const void *caller)
+     khdays_log("stop: %s 0x%llx (from %s, %p)", what, value, function, caller);
+     khdays_log_close();
+     fflush(stderr);
++#if defined(KHDAYS_BROWSER_MEMORY)
++    abort();
++#else
+     ExitProcess(5);
++#endif
+ }
+
+ #if defined(_MSC_VER)
+@@ -37,6 +43,13 @@ int khdays_game_ram_ref(unsigned int reference)
+
+ KhdaysRef khdays_reference(const void *host)
+ {
++#if defined(KHDAYS_BROWSER_MEMORY)
++    KhdaysRef reference;
++    if (!khdays_window_try_reference(host, &reference)) {
++        stop("an unmapped host address, as a reference:", (unsigned long long)(size_t)host, CALLER());
++    }
++    return reference;
++#else
+     unsigned long long offset;
+     if (host == NULL) {
+         return 0; /* NULL, the game's 0 */
+@@ -49,6 +62,7 @@ KhdaysRef khdays_reference(const void *host)
+         stop("a host address past the game's memory, as a reference:", (unsigned long long)(size_t)host, CALLER());
+     }
+     return (KhdaysRef)offset;
++#endif
+ }
+
+ /* The function references the build numbered: one record each in section .khfr$m
+diff --git a/port/runtime/core/window.h b/port/runtime/core/window.h
+index f2b44ec..336a705 100644
+--- a/port/runtime/core/window.h
++++ b/port/runtime/core/window.h
+@@ -11,7 +11,15 @@ typedef unsigned int KhdaysRef;
+ /* The host address of reference 0: where the game's memory starts. */
+ extern unsigned char *khdays_window;
+
++#if defined(KHDAYS_BROWSER_MEMORY)
++void *khdays_window_range(KhdaysRef reference, size_t size);
++void *khdays_window_address(KhdaysRef reference);
++int khdays_window_try_reference(const void *host, KhdaysRef *reference);
++void khdays_memory_unmap(void); /* After all game contexts have been deleted. */
++#define KHDAYS_W(reference) khdays_window_address((KhdaysRef)(reference))
++#else
+ #define KHDAYS_W(reference) ((void *)(khdays_window + (KhdaysRef)(reference)))
++#endif
+
+ /* The game's heaps' region: above the DS's ranges and the stacks, below 0x80000000 (the game keeps
+  * heap handles and free sizes in int). The main heap's span, then the sub heap's; a granule is
+@@ -34,8 +42,12 @@ extern unsigned char *khdays_window;
+ static inline int khdays_game_ram(KhdaysRef reference)
+ {
+     return (reference >= 0x02000000u && reference < 0x02400000u) ||
++#if defined(KHDAYS_BROWSER_MEMORY)
++           (reference >= KHDAYS_HEADERS_BASE && reference < KHDAYS_HEADERS_END);
++#else
+            (reference >= KHDAYS_HEADERS_BASE && reference < KHDAYS_HEADERS_END) ||
+            (reference >= KHDAYS_HEAPS_BASE && reference < KHDAYS_HEAPS_END);
++#endif
+ }
+
+ /* How many bytes of the heaps' region the PC has given the game so far. */
+diff --git a/port/runtime/mods/models.cpp b/port/runtime/mods/models.cpp
+index c601183..a9f2aa0 100644
+--- a/port/runtime/mods/models.cpp
++++ b/port/runtime/mods/models.cpp
+@@ -62,7 +62,14 @@ Floor floor_of(const Model &m, const Mat &base)
+     // the locals the game's functions read are passed by reference: the game thread's stack must be
+     // in the game's memory (it is, as the game's own casts pass theirs)
+     int here = 0;
+-    if (static_cast<std::uintptr_t>(reinterpret_cast<const unsigned char *>(&here) - khdays_window) >= 0x100000000ULL) {
++#if defined(KHDAYS_BROWSER_MEMORY)
++    KhdaysRef here_ref;
++    const bool stack_mapped = khdays_window_try_reference(&here, &here_ref) != 0;
++#else
++    const bool stack_mapped =
++        static_cast<std::uintptr_t>(reinterpret_cast<const unsigned char *>(&here) - khdays_window) < 0x100000000ULL;
++#endif
++    if (!stack_mapped) {
+         trace_floor(m, "off: the game thread's stack is outside the game's memory");
+         return f;
+     }
+diff --git a/port/runtime/plugins/engine.c b/port/runtime/plugins/engine.c
+index da89527..1a8b070 100644
+--- a/port/runtime/plugins/engine.c
++++ b/port/runtime/plugins/engine.c
+@@ -37,16 +37,25 @@ static int in_memory(KhRef ref)
+
+ static void *pointer(KhRef ref)
+ {
++#if defined(KHDAYS_BROWSER_MEMORY)
++    return in_memory(ref) ? khdays_window_range(ref, 1) : NULL;
++#else
+     return in_memory(ref) ? KHDAYS_W(ref) : NULL;
++#endif
+ }
+
+ static KhRef reference(const void *address)
+ {
++#if defined(KHDAYS_BROWSER_MEMORY)
++    KhdaysRef ref;
++    return khdays_window_try_reference(address, &ref) && in_memory(ref) ? ref : 0;
++#else
+     const unsigned char *a = address;
+     if (a == NULL || a < khdays_window || (unsigned long long)(a - khdays_window) > 0xffffffffull) {
+         return 0;
+     }
+     return in_memory((KhRef)(a - khdays_window)) ? (KhRef)(a - khdays_window) : 0;
++#endif
+ }
+
+ static int by_routine_name(const void *key, const void *entry)
+diff --git a/port/runtime/scripts/game_link.c b/port/runtime/scripts/game_link.c
+index 2744162..f2cf7ee 100644
+--- a/port/runtime/scripts/game_link.c
++++ b/port/runtime/scripts/game_link.c
+@@ -14,6 +14,7 @@
+ #include "khdays_ds_symbols.h"
+
+ #include <stdio.h>
++#include <stdint.h>
+ #include <stdlib.h>
+ #include <string.h>
+
+@@ -534,11 +535,21 @@ int khdays_link_reachable(unsigned address, unsigned long long size)
+     static const unsigned memories[][2] = {{0x02000000u, 0x02400000u}, /* main RAM */
+                                            {KHDAYS_HEADERS_BASE, KHDAYS_HEADERS_END},
+                                            {KHDAYS_DATA_AREA, KHDAYS_DATA_AREA_END},
+-                                           {KHDAYS_HEAPS_BASE, KHDAYS_HEAPS_END}};
++#if !defined(KHDAYS_BROWSER_MEMORY)
++                                           {KHDAYS_HEAPS_BASE, KHDAYS_HEAPS_END},
++#endif
++    };
++    if (size > 0x100000000ull - address) {
++        return 0;
++    }
+     const unsigned long long end = address + size;
+     for (size_t i = 0; i < sizeof(memories) / sizeof(memories[0]); ++i) {
+         if (address >= memories[i][0] && end <= memories[i][1]) {
++#if defined(KHDAYS_BROWSER_MEMORY)
++            return size == 0 || (size <= SIZE_MAX && khdays_window_range(address, (size_t)size) != NULL);
++#else
+             return 1;
++#endif
+         }
+     }
+     return 0;
+@@ -575,7 +586,9 @@ int khdays_link_write(unsigned address, const void *in, size_t size)
+     if (!khdays_link_reachable(address, size)) {
+         return 0;
+     }
+-    memcpy(KHDAYS_W(address), in, size);
++    if (size != 0) {
++        memcpy(KHDAYS_W(address), in, size);
++    }
+     return 1;
+ }
+
+diff --git a/port/runtime/sound/sound_bridge.c b/port/runtime/sound/sound_bridge.c
+index 0217e2c..5bd5efc 100644
+--- a/port/runtime/sound/sound_bridge.c
++++ b/port/runtime/sound/sound_bridge.c
+@@ -809,7 +809,11 @@ void khdays_sound_wave_archive_loaded(int wave_archive, const void *address)
+         hw.source = &heard_source; /* before any stream is prepared: only the replaced waves */
+     }
+     khdays_sound_mods_wave_archive(a, wave_archive,
++#if defined(KHDAYS_BROWSER_MEMORY)
++                                   KHDAYS_REF(address));
++#else
+                                    (u32)((const unsigned char *)address - khdays_window)); /* its DS address */
++#endif
+     ReleaseSRWLockExclusive(&lock);
+ }
+
+diff --git a/port/sound/snd7_internal.h b/port/sound/snd7_internal.h
+index aa9ff54..9a25c70 100644
+--- a/port/sound/snd7_internal.h
++++ b/port/sound/snd7_internal.h
+@@ -8,6 +8,10 @@
+ #include "channels.h"
+ #include "snd7.h"
+
++#if defined(KHDAYS_BROWSER_MEMORY)
++#include "../runtime/core/window.h"
++#endif
++
+ #include <stdint.h>
+
+ /* --- The driver's world ------------------------------------------------------------ */
+@@ -21,7 +25,11 @@ extern uint64_t snd7_now;               /* the driver's time, in cycles */
+ /* The DS's memory (the ARM9's lists, sequences, banks, waves). */
+ static inline uint8_t *snd7_ds(uint32_t address)
+ {
++#if defined(KHDAYS_BROWSER_MEMORY)
++    return KHDAYS_W(address);
++#else
+     return (uint8_t *)(snd7_ds_base + address);
++#endif
+ }
+ static inline uint8_t snd7_rd8(uint32_t a)
+ {
+diff --git a/port/ui/hud_options.cpp b/port/ui/hud_options.cpp
+index 32b9f1c..9270bc9 100644
+--- a/port/ui/hud_options.cpp
++++ b/port/ui/hud_options.cpp
+@@ -40,7 +40,11 @@ extern "C" unsigned khdays_ui_information_policy(void)
+     static unsigned policy;
+     const unsigned wanted = (khdays_hud_setting(KHDAYS_OPT_INFORMATION) ? 1u : 0u) |
+                             (khdays_hud_setting(KHDAYS_OPT_INFORMATION_HUD) ? 2u : 0u);
++#if defined(KHDAYS_BROWSER_MEMORY)
++    const unsigned panel = khdays_window_range(0x0207f614u, 4) ? ram_word(0x0207f614) : 0;
++#else
+     const unsigned panel = khdays_window ? ram_word(0x0207f614) : 0;
++#endif
+     const unsigned state =
+         panel && khdays_game_ram(panel) && khdays_game_ram(panel + 0x18f) ? ram_word(panel + 0x18c) : 0;
+     if (state < 1 || state > 8)

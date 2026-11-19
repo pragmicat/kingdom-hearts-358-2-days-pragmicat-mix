@@ -1,0 +1,388 @@
+diff --git a/port/runtime/sound/sound_bridge.c b/port/runtime/sound/sound_bridge.c
+index 0217e2c..9e4552e 100644
+--- a/port/runtime/sound/sound_bridge.c
++++ b/port/runtime/sound/sound_bridge.c
+@@ -24,7 +24,11 @@
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
++#if defined(__EMSCRIPTEN__)
++#include "sound_browser_platform.h"
++#else
+ #include <windows.h>
++#endif
+ 
+ static SRWLOCK lock = SRWLOCK_INIT;
+ static const KhdaysSnd7Driver *driver;
+diff --git a/port/runtime/sound/sound_browser_platform.h b/port/runtime/sound/sound_browser_platform.h
+new file mode 100644
+index 0000000..35eb7b9
+--- /dev/null
++++ b/port/runtime/sound/sound_browser_platform.h
+@@ -0,0 +1,30 @@
++/* Single-cooperative-thread sound platform for the browser build. The driver,
++ * mixer, callbacks and replacement decoder MUST NOT suspend while a lock is
++ * held. These guards detect re-entry; they are not pthread synchronization. */
++#ifndef KHDAYS_SOUND_BROWSER_PLATFORM_H
++#define KHDAYS_SOUND_BROWSER_PLATFORM_H
++#if !defined(__EMSCRIPTEN__) || defined(__EMSCRIPTEN_PTHREADS__)
++#error This sound host requires single-threaded Emscripten
++#endif
++#include <assert.h>
++#include <stdint.h>
++#include <emscripten.h>
++#include <emscripten/html5.h>
++
++typedef long LONG;
++_Static_assert(sizeof(LONG) == 4, "browser sound expects a 32-bit LONG");
++typedef int64_t LONG64;
++typedef struct { int held; } SRWLOCK;
++#define SRWLOCK_INIT {0}
++static inline void AcquireSRWLockExclusive(SRWLOCK *lock) { assert(!lock->held); lock->held = 1; }
++static inline void ReleaseSRWLockExclusive(SRWLOCK *lock) { assert(lock->held); lock->held = 0; }
++static inline LONG InterlockedExchange(volatile LONG *at, LONG value) { LONG old=*at; *at=value; return old; }
++static inline LONG InterlockedCompareExchange(volatile LONG *at,LONG value,LONG expected) { LONG old=*at; if(old==expected)*at=value; return old; }
++static inline LONG InterlockedIncrement(volatile LONG *at) { *at=(LONG)((uint32_t)*at+1u); return *at; }
++static inline LONG InterlockedDecrement(volatile LONG *at) { *at=(LONG)((uint32_t)*at-1u); return *at; }
++static inline LONG InterlockedOr(volatile LONG *at,LONG bits) { LONG old=*at; *at|=bits; return old; }
++static inline LONG InterlockedAnd(volatile LONG *at,LONG bits) { LONG old=*at; *at&=bits; return old; }
++typedef struct { int64_t QuadPart; } LARGE_INTEGER;
++static inline void QueryPerformanceCounter(LARGE_INTEGER *out) { out->QuadPart=(int64_t)(emscripten_get_now()*1000.0); }
++static inline void QueryPerformanceFrequency(LARGE_INTEGER *out) { out->QuadPart=1000000; }
++#endif
+diff --git a/port/runtime/sound/sound_mods.c b/port/runtime/sound/sound_mods.c
+index 3462748..bf4d21f 100644
+--- a/port/runtime/sound/sound_mods.c
++++ b/port/runtime/sound/sound_mods.c
+@@ -12,12 +12,23 @@
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
++#if defined(__EMSCRIPTEN__)
++#include "sound_browser_platform.h"
++#include <dirent.h>
++#include <sys/stat.h>
++#else
+ #include <windows.h>
++#endif
+ 
+ /* The decoded files kept, at most (a few minutes of stereo music is tens of
+  * MB): past it, the least recently used that nothing plays are let go, and
+  * decoded again if they are wanted again. */
++#if defined(__EMSCRIPTEN__)
++#define KEPT_BYTES (64u * 1024 * 1024)
++#define BROWSER_DECODE_QUEUE 64
++#else
+ #define KEPT_BYTES (384u * 1024 * 1024)
++#endif
+ 
+ /* --- The files, by identifier ---------------------------------------------------------- */
+ 
+@@ -37,10 +48,63 @@ typedef struct Entry {
+ static Entry *entries;
+ static u64 uses;
+ static SRWLOCK queue_lock = SRWLOCK_INIT;
++#if !defined(__EMSCRIPTEN__)
+ static CONDITION_VARIABLE queue_filled = CONDITION_VARIABLE_INIT;
++#endif
+ static Entry **queue; /* the decoder's, the first next (grows) */
+ static int queued, queue_room;
+ 
++#if defined(__EMSCRIPTEN__)
++static int decoder_pending;
++static void keep_within_budget(void);
++
++/* A replacement job belongs to the game. It must neither postpone native
++ * exit nor run after a fatal error. Emscripten's safe timers hold the runtime. */
++EM_JS(void, browser_schedule_decoder, (void), {
++    Module['daysDecoderTimer'] = setTimeout(() => {
++        delete Module['daysDecoderTimer'];
++        if (!ABORT) Module['_khdays_sound_mods_browser_decode_one']();
++    }, 1);
++});
++
++EM_JS(void, browser_cancel_decoder, (void), {
++    clearTimeout(Module['daysDecoderTimer']);
++    delete Module['daysDecoderTimer'];
++});
++
++static void browser_wake_decoder(void)
++{
++    if (queued != 0 && !decoder_pending) {
++        decoder_pending = 1;
++        browser_schedule_decoder();
++    }
++}
++
++EMSCRIPTEN_KEEPALIVE void khdays_sound_mods_browser_decode_one(void)
++{
++    Entry *e;
++    char why[160];
++    decoder_pending = 0;
++    if (queued == 0) return;
++    /* A callback begins only after the enqueueing bridge call has returned.
++     * Decode ONE bounded file per event-loop turn, never under a bridge lock. */
++    AcquireSRWLockExclusive(&queue_lock);
++    e = queue[0];
++    memmove(queue, queue + 1, (size_t)--queued * sizeof(queue[0]));
++    ReleaseSRWLockExclusive(&queue_lock);
++    if (khdays_replacement_load(&e->file, e->path, &e->loop, why, sizeof(why))) e->state = READY;
++    else { fprintf(stderr, "sound: %s %s; the original plays\n", e->path, why); e->state = FAILED; }
++    keep_within_budget();
++    browser_wake_decoder();
++}
++EMSCRIPTEN_KEEPALIVE void khdays_sound_mods_browser_stop(void)
++{
++    if (decoder_pending) browser_cancel_decoder();
++    decoder_pending = 0;
++    for (int i = 0; i < queued; ++i) if (queue[i]->state == QUEUED) queue[i]->state = LET_GO;
++    queued = 0;
++}
++#else
+ static DWORD WINAPI decoder(LPVOID unused)
+ {
+     (void)unused;
+@@ -64,19 +128,28 @@ static DWORD WINAPI decoder(LPVOID unused)
+     }
+ }
+ 
++#endif
++
+ /* Puts a file that was let go in the decoder's queue: first when it is wanted now, last when it is
+  * decoded ahead (what plays now does not wait behind those); one already queued and wanted now goes
+  * first. */
+ static void enqueue(Entry *e, int now)
+ {
++#if !defined(__EMSCRIPTEN__)
+     static int started;
++#endif
+     int at = -1;
++#if !defined(__EMSCRIPTEN__)
+     if (!started) {
+         started = 1;
+         CreateThread(NULL, 0, decoder, NULL, 0, NULL);
+     }
++#endif
+     AcquireSRWLockExclusive(&queue_lock);
+     if (e->state == LET_GO) {
++#if defined(__EMSCRIPTEN__)
++        if (queued >= BROWSER_DECODE_QUEUE) { ReleaseSRWLockExclusive(&queue_lock); return; }
++#endif
+         if (queued == queue_room) {
+             const int room = queue_room ? queue_room * 2 : 64;
+             Entry **grown = (Entry **)realloc(queue, (size_t)room * sizeof(*grown));
+@@ -90,7 +163,9 @@ static void enqueue(Entry *e, int now)
+         InterlockedExchange(&e->state, QUEUED);
+         queue[queued] = e;
+         at = queued++;
++#if !defined(__EMSCRIPTEN__)
+         WakeConditionVariable(&queue_filled);
++#endif
+     } else {
+         for (int i = 0; i < queued && at < 0; ++i) {
+             at = queue[i] == e ? i : -1;
+@@ -101,6 +176,9 @@ static void enqueue(Entry *e, int now)
+         queue[0] = e;
+     }
+     ReleaseSRWLockExclusive(&queue_lock);
++#if defined(__EMSCRIPTEN__)
++    browser_wake_decoder();
++#endif
+ }
+ 
+ /* Past the budget, the least recently used files nothing plays are let go. */
+@@ -140,15 +218,23 @@ static int any_mod_has(const char *sub)
+     for (int i = 0; i < khdays_mods_started_count(); ++i) {
+         const char *path = khdays_mods_started_path(i);
+         char folder[600];
++#if defined(__EMSCRIPTEN__)
++        struct stat attributes;
++#else
+         DWORD attributes;
++#endif
+         if (path == NULL) {
+             continue;
+         }
+         snprintf(folder, sizeof(folder), "%s/%s", path, sub);
++#if defined(__EMSCRIPTEN__)
++        if (stat(folder, &attributes) == 0 && S_ISDIR(attributes.st_mode)) return 1;
++#else
+         attributes = GetFileAttributesA(folder);
+         if (attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY)) {
+             return 1;
+         }
++#endif
+     }
+     return 0;
+ }
+@@ -255,6 +341,30 @@ static Entry *entry_of_file(const char *path, const char *name)
+  * not among the entries). */
+ static Entry silence = {"silence", "none", {0}, READY, {32768, 1, 0, NULL, 0, 0, 0}, 0, 0, NULL};
+ 
++#if defined(__EMSCRIPTEN__)
++static void decode_archive_ahead(const char *mod_path, const char *archive)
++{
++    char folder[600];
++    DIR *directory;
++    struct dirent *file;
++    if (snprintf(folder, sizeof(folder), "%s/sounds/seqarc/%s", mod_path, archive) >= (int)sizeof(folder)) return;
++    directory = opendir(folder);
++    if (directory == NULL) return;
++    while ((file = readdir(directory)) != NULL) {
++        char identifier[160], path[900];
++        struct stat attributes;
++        Entry *e;
++        const char *dot = strrchr(file->d_name, '.');
++        if (file->d_name[0] == '.' || dot == NULL) continue;
++        if (snprintf(path, sizeof(path), "%s/%s", folder, file->d_name) >= (int)sizeof(path) ||
++            stat(path, &attributes) != 0 || !S_ISREG(attributes.st_mode)) continue;
++        if (snprintf(identifier, sizeof(identifier), "seqarc/%s/%.*s", archive, (int)(dot-file->d_name), file->d_name) >= (int)sizeof(identifier)) continue;
++        e = entry_find(identifier);
++        if (e != NULL && e->state == LET_GO) enqueue(e, 0);
++    }
++    closedir(directory);
++}
++#else
+ /* Whether a found file is a folder of its own (not "." or ".."). */
+ static int is_folder(const WIN32_FIND_DATAA *found)
+ {
+@@ -290,6 +400,8 @@ static void decode_archive_ahead(const char *mod_path, const char *archive)
+     FindClose(found);
+ }
+ 
++#endif
++
+ /* The voices' streams the mods have (sounds/strm/<name>, a stream of a voices' player: PLAYER_STRM_V01's
+  * lines), queued to decode: short, and wanted at once when a line is said. */
+ static void decode_voice_streams_ahead(const KhdaysSoundArchive *archive)
+@@ -338,11 +450,29 @@ static void decode_entries_ahead(const KhdaysSoundArchive *sdat)
+     for (int i = 0; i < khdays_mods_started_count(); ++i) {
+         const char *path = khdays_mods_started_path(i);
+         char pattern[600];
++#if defined(__EMSCRIPTEN__)
++        DIR *archives;
++        struct dirent *archive;
++#else
+         WIN32_FIND_DATAA archive;
+         HANDLE archives;
++#endif
+         if (path == NULL) {
+             continue;
+         }
++#if defined(__EMSCRIPTEN__)
++        if (snprintf(pattern, sizeof(pattern), "%s/sounds/seqarc", path) >= (int)sizeof(pattern)) continue;
++        archives = opendir(pattern);
++        if (archives == NULL) continue;
++        while ((archive = readdir(archives)) != NULL) {
++            char folder[900];
++            struct stat attributes;
++            if (archive->d_name[0] == '.') continue;
++            if (snprintf(folder, sizeof(folder), "%s/%s", pattern, archive->d_name) >= (int)sizeof(folder)) continue;
++            if (stat(folder, &attributes) == 0 && S_ISDIR(attributes.st_mode)) decode_archive_ahead(path, archive->d_name);
++        }
++        closedir(archives);
++#else
+         snprintf(pattern, sizeof(pattern), "%s\\sounds\\seqarc\\*", path);
+         archives = FindFirstFileA(pattern, &archive);
+         if (archives == INVALID_HANDLE_VALUE) {
+@@ -354,6 +484,7 @@ static void decode_entries_ahead(const KhdaysSoundArchive *sdat)
+             }
+         } while (FindNextFileA(archives, &archive));
+         FindClose(archives);
++#endif
+     }
+ }
+ 
+diff --git a/port/runtime/sound/sound_mods.h b/port/runtime/sound/sound_mods.h
+index 35f9f69..7d7ceff 100644
+--- a/port/runtime/sound/sound_mods.h
++++ b/port/runtime/sound/sound_mods.h
+@@ -60,4 +60,9 @@ void khdays_sound_mods_mix(const KhdaysSoundHw *hw, const KhdaysSnd7Driver *driv
+                            uint32_t finished_tag, const float player_gain[16], const float stream_gain[4],
+                            const float *channel_gain, float out[2]);
+ 
++#if defined(__EMSCRIPTEN__)
++/* Cancel pending cooperative replacement decoding before disposing a module. */
++void khdays_sound_mods_browser_stop(void);
++#endif
++
+ #endif
+diff --git a/port/sound/replace.c b/port/sound/replace.c
+index 612f656..da5fb35 100644
+--- a/port/sound/replace.c
++++ b/port/sound/replace.c
+@@ -17,6 +17,20 @@
+ #define DR_FLAC_NO_WCHAR
+ #include "dr_flac.h"
+ 
++#if defined(__EMSCRIPTEN__)
++#ifndef KHDAYS_BROWSER_SOUND_FILE_LIMIT
++#define KHDAYS_BROWSER_SOUND_FILE_LIMIT (8u * 1024u * 1024u)
++#endif
++#ifndef KHDAYS_BROWSER_SOUND_PCM_LIMIT
++#define KHDAYS_BROWSER_SOUND_PCM_LIMIT (8u * 1024u * 1024u)
++#endif
++static int browser_pcm_allowed(const KhdaysReplacement *r)
++{
++    return r->channels >= 1 && r->channels <= 2 && r->frames > 0 && r->rate > 0 && r->rate <= 192000 &&
++           r->frames <= KHDAYS_BROWSER_SOUND_PCM_LIMIT / ((uint64_t)r->channels * sizeof(int16_t));
++}
++#endif
++
+ static void say(char *why, int size, const char *text)
+ {
+     snprintf(why, (size_t)size, "%s", text);
+@@ -129,6 +143,11 @@ static uint8_t *read_file(const char *path, size_t *size)
+     fseek(f, 0, SEEK_END);
+     length = ftell(f);
+     fseek(f, 0, SEEK_SET);
++#if defined(__EMSCRIPTEN__)
++    if (length < 0 || (uint64_t)length > KHDAYS_BROWSER_SOUND_FILE_LIMIT) {
++        fclose(f); *size = 0; return NULL;
++    }
++#endif
+     data = length > 0 ? malloc((size_t)length) : NULL;
+     if (data != NULL && fread(data, 1, (size_t)length, f) != (size_t)length) {
+         free(data);
+@@ -200,6 +219,13 @@ static int load_wav(KhdaysReplacement *r, const char *path, const KhdaysOriginal
+         return 0;
+     }
+     r->frames = samples_size / (uint32_t)(bits / 8 * r->channels);
++#if defined(__EMSCRIPTEN__)
++    if (!browser_pcm_allowed(r)) {
++        free(data);
++        say(why, why_size, "exceeds the browser's bounded replacement decode budget");
++        return 0;
++    }
++#endif
+     r->samples = malloc((size_t)r->frames * (size_t)r->channels * sizeof(int16_t));
+     if (r->samples == NULL) {
+         free(data);
+@@ -267,6 +293,13 @@ static int load_flac(KhdaysReplacement *r, const char *path, const KhdaysOrigina
+         say(why, why_size, "has other than 1 or 2 channels, or no length");
+         return 0;
+     }
++#if defined(__EMSCRIPTEN__)
++    if (!browser_pcm_allowed(r)) {
++        drflac_close(flac); free(data);
++        say(why, why_size, "exceeds the browser's bounded replacement decode budget");
++        return 0;
++    }
++#endif
+     r->samples = malloc((size_t)r->frames * (size_t)r->channels * sizeof(int16_t));
+     if (r->samples == NULL) {
+         drflac_close(flac);
+@@ -313,6 +346,13 @@ static int load_ogg(KhdaysReplacement *r, const char *path, const KhdaysOriginal
+         say(why, why_size, "has other than 1 or 2 channels, or no length");
+         return 0;
+     }
++#if defined(__EMSCRIPTEN__)
++    if (!browser_pcm_allowed(r)) {
++        stb_vorbis_close(ogg); free(data);
++        say(why, why_size, "exceeds the browser's bounded replacement decode budget");
++        return 0;
++    }
++#endif
+     r->samples = malloc((size_t)r->frames * (size_t)r->channels * sizeof(int16_t));
+     if (r->samples == NULL) {
+         stb_vorbis_close(ogg);

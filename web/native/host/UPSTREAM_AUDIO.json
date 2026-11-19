@@ -1,0 +1,14 @@
+{
+  "commit": "2037f79a171524eafcf40a1d641b16da14667a64",
+  "sha256": {
+    "port/host/app/sound_output.h": "ffda4bdbe9813d8e807ecc20cc3ad62ca9a4582a22e5455afd3161399250fa40",
+    "port/host/app/profile.h": "bc17a16c6fc6b9f641ec2368376987295ba080c43aa534e041c40fd4400b4571",
+    "port/host/app/hud_settings.h": "423ad4f9b00a9925eaf09a1b123b8e1d699b20321aff4789ede3eb3ee93d43e2",
+    "port/runtime/sound/sound_bridge.h": "335de7ec239a88c4fa67996eb780b7283b3a28e77a6570dcbc98e0b0a9a0e4d0",
+    "port/sound/archive.h": "16e7a87a5474ada54b373c5ed8df2a2927cadf405ac00e9b7f6c484fc50ecb8c",
+    "port/sound/mix_ds.h": "4bca657d2447c693ee43b6844f57ba2eb8b13e9528779a891ed2978511256b2a",
+    "port/sound/mix_ds.c": "eb48d583b8b686d73b8036e7e3cba26a616a68eb62a03b24abf3dd58604bd5b7",
+    "port/sound/channels.h": "c9f3ae238051508dc1b8a7f948f51d3ffbbe9d85421a300793a90b1c8df31ef3",
+    "port/sound/channels.c": "2abc96f33fb8c74ad604fd9b3522c5ab607c91331079f43fec2655c24a4454c7"
+  }
+}

@@ -1,0 +1,7 @@
+Kingdom Hearts 358/2 Days: Pragmicat Mix is an unofficial fan project.
+Kingdom Hearts names, original logo artwork, and related marks belong to Disney and Square Enix. The game-title reference is not covered by this project's MIT license.
+Logo reference: https://www.khwiki.com/File:Kingdom_Hearts_358-2_Days_Logo_KHD.png
+
+The PRAGMICAT MIX floral subtitle was supplied by the project owner and is preserved as a metadata-free PNG with unchanged RGBA pixels. Built-in image editing replaced the project subtitle in the combined Days wordmark with that supplied pink lettering and blossoms. The transparent full wordmark is 1600 x 1152; the SVG is a self-contained wrapper around the same final PNG. This is an AI-assisted composition, without a claim of pixel-identical reproduction of the reference game title.
+
+The separate pink heart artwork remains the source for the application icons. These icons contain no lettering. No executable or installer was built as part of this branding edit.

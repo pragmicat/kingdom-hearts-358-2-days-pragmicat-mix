@@ -1,0 +1,31 @@
+diff --git a/port/runtime/input/input.c b/port/runtime/input/input.c
+index cc68bf3..355814e 100644
+--- a/port/runtime/input/input.c
++++ b/port/runtime/input/input.c
+@@ -1,6 +1,9 @@
+ /* The buttons, stylus and sticks as the game reads them (input.h): the script of presses for runs
+  * without a window, and each game frame's latch that Pad_Sample reads, with the port's menus and
+  * enhancements taking their part. */
++#if defined(KHDAYS_BROWSER) && !defined(_POSIX_C_SOURCE)
++#define _POSIX_C_SOURCE 200809L
++#endif
+ #include "../core/language.h"
+ #include "input.h"
+ #include "../../host/app/press_edges.h"
+@@ -28,6 +31,16 @@
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
++#if defined(KHDAYS_BROWSER)
++#include <strings.h>
++/* Emscripten's libc supplies the same owned copy, reentrant tokenization and
++ * case-insensitive control-name matching. Both scanf sites read only ints;
++ * they do not use the extra buffer-size arguments of Microsoft's %s/%c forms. */
++#define _strdup strdup
++#define strtok_s strtok_r
++#define _stricmp strcasecmp
++#define sscanf_s sscanf
++#endif
+ 
+ #define DIRECTIONS (KHDAYS_KEY_UP | KHDAYS_KEY_DOWN | KHDAYS_KEY_LEFT | KHDAYS_KEY_RIGHT)
+ 

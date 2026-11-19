@@ -1,0 +1,137 @@
+diff --git a/port/tools/prepare.py b/port/tools/prepare.py
+--- a/port/tools/prepare.py
++++ b/port/tools/prepare.py
+@@ -4067,1 +4067,16 @@
++# These eight pinned veneers only select callback slots. Their real target
++# returns void and the IRQ table calls void(void); never forward a bogus r0
++# value or turn the slot number into a runtime-generated mapping.
++for _irq_slot, _irq_name in enumerate((
++    "OSi_IrqDma0", "OSi_IrqDma1", "OSi_IrqDma2", "OSi_IrqDma3",
++    "OSi_IrqTimer0", "OSi_IrqTimer1", "OSi_IrqTimer2", "OSi_IrqTimer3",
++)):
++    FILE_HOOKS[f"libs/nitro/os/calls/{_irq_name}.c"] = [
++        ("extern void *OSi_IrqCallback();", "extern void OSi_IrqCallback(unsigned int slot);"),
++        (
++            f"void *{_irq_name}() {{\n    return OSi_IrqCallback({_irq_slot});\n}}",
++            f"void {_irq_name}(void) {{\n    OSi_IrqCallback({_irq_slot});\n}}",
++        ),
++    ]
++
+ FILE_HOOKS["src/overlays/scenes/ov002_field/Ov002_SetCaptionText.c"] = [
+diff --git a/port/tools/irq_veneer_abi_test.py b/port/tools/irq_veneer_abi_test.py
+new file mode 100644
+--- /dev/null
++++ b/port/tools/irq_veneer_abi_test.py
+@@ -0,0 +1,112 @@
++"""Eight exact IRQ veneers: true void table calls and real callback dispatch."""
++from pathlib import Path
++import os
++import subprocess
++import sys
++import tempfile
++import unittest
++
++sys.path.insert(0,str(Path(__file__).resolve().parent))
++import prepare
++from references import rewrite_text
++from references.emit import EmitFailure, Index
++from references.preprocess import Flags, preprocess
++
++NAMES = [f"OSi_Irq{kind}{n}" for kind in ("Dma","Timer") for n in range(4)]
++
++
++def patched(name,source):
++    for before,after in prepare.FILE_HOOKS[f"libs/nitro/os/calls/{name}.c"]:
++        if source.count(before)!=1:raise AssertionError("exact IRQ veneer hook must match once")
++        source=source.replace(before,after)
++    return source
++
++
++class IRQVeneerABI(unittest.TestCase):
++    def test_original_forwarded_result_is_rejected(self):
++        for slot,name in enumerate(NAMES):
++            source=f"extern void *OSi_IrqCallback(); void *{name}(){{return OSi_IrqCallback({slot});}}"
++            with self.subTest(name=name),self.assertRaisesRegex(EmitFailure,"used return value"):
++                rewrite_text(source,name+".c",Index(game_functions={name,"OSi_IrqCallback"},
++                             discarded_returns={"OSi_IrqCallback":"void"}))
++
++    @unittest.skipUnless(os.environ.get("KHDAYS_TEST_DECOMP"),"set pinned decomp source")
++    def test_all_eight_pinned_hooks_preserve_their_exact_slots(self):
++        root=Path(os.environ["KHDAYS_TEST_DECOMP"])
++        table=(root/"libs/nitro/os/auto/os_irq_table_027e0000.c").read_text()
++        callback=(root/"libs/nitro/os/calls/OSi_IrqCallback.c").read_text()
++        self.assertIn("typedef void (*OSIrqFunction)(void);",table)
++        self.assertIn("void OSi_IrqCallback(u32 slot)",callback)
++        for slot,name in enumerate(NAMES):
++            source=(root/f"libs/nitro/os/calls/{name}.c").read_text()
++            result=patched(name,source)
++            self.assertIn(f"void {name}(void)",result)
++            self.assertIn(f"OSi_IrqCallback({slot});",result)
++            self.assertNotIn("return ",result)
++            self.assertIn(f"extern void {name}(void);",table)
++            with self.assertRaisesRegex(AssertionError,"exact IRQ"):
++                patched(name,source.replace(f"OSi_IrqCallback({slot})",f"OSi_IrqCallback({slot+1})"))
++
++    @unittest.skipUnless(os.environ.get("KHDAYS_TEST_DECOMP") and os.environ.get("KHDAYS_TEST_EMCC"),
++                         "set pinned sources and Emscripten for real Wasm execution")
++    def test_real_callback_through_true_irq_table_type(self):
++        root=Path(os.environ["KHDAYS_TEST_DECOMP"])
++        index=Index(game_functions=set(NAMES)|{"OSi_IrqCallback","OS_DisableIrqMask"},game_objects=set(),
++                    discarded_returns={"OSi_IrqCallback":"void","OS_DisableIrqMask":"i32"})
++        sources={name:patched(name,(root/f"libs/nitro/os/calls/{name}.c").read_text()) for name in NAMES}
++        sources["callback"]=(root/"libs/nitro/os/calls/OSi_IrqCallback.c").read_text()
++        main=r"""
++typedef unsigned int u32; typedef void (*Handler)(void*);
++typedef struct {Handler fn;volatile u32 keep;void *arg;} Slot;
++Slot data_020442a8[8];u32 data_027e0000[4096];
++extern void (*fixture_irq_table[22])(void);extern unsigned short data_020422a0[8];
++static u32 args[8],trace[9],count,disabled,disable_count,error,twice;
++void OS_IrqDummy(void){}
++u32 OS_DisableIrqMask(u32 mask){disabled|=mask;++disable_count;return 0;}
++static void handler(void *arg){
++    u32 slot=*(u32*)arg;
++    if(slot>7||data_020442a8[slot].fn||count>=9){error=1;return;}
++    trace[count++]=slot;
++    if(slot==2&&!twice++){data_020442a8[slot].fn=handler;data_020442a8[slot].keep=1;}
++}
++int main(void){
++    const u32 bits[8]={8,9,10,11,3,4,5,6};u32 all=0;
++    for(u32 i=0;i<8;++i){
++        if(data_020422a0[i]!=bits[i])return 1;
++        args[i]=i;data_020442a8[i].fn=handler;data_020442a8[i].arg=&args[i];all|=1u<<bits[i];
++    }
++    for(u32 i=0;i<8;++i)fixture_irq_table[bits[i]]();
++    if(error||count!=8||disable_count!=7||disabled!=(all^(1u<<10))||data_027e0000[0x3ff8/4]!=all)return 2;
++    for(u32 i=0;i<8;++i)if(trace[i]!=i||(i!=2&&data_020442a8[i].fn))return 3;
++    fixture_irq_table[8]();if(count!=8||disable_count!=8)return 4; /* cleared callback stays one-shot */
++    fixture_irq_table[10]();if(error||count!=9||trace[8]!=2||data_020442a8[2].fn)return 5; /* rearmed handler */
++    fixture_irq_table[10]();return count==9&&disable_count==8?0:6;
++}
++"""
++        with tempfile.TemporaryDirectory(prefix="days-irq-veneer-") as temp:
++            folder=Path(temp)
++            (folder/"khdays_references.h").write_text(
++                "typedef unsigned int khdays_ref;typedef void (*khdays_function_pointer)(void);\n"
++                "#define KHDAYS_W(r) ((void *)(r))\n#define KHDAYS_REF(p) ((khdays_ref)(p))\n"
++                "#define KHDAYS_FN(r) ((khdays_function_pointer)(r))\n")
++            outputs=[]
++            for name,source in sources.items():
++                raw=folder/(name+".raw.c");raw.write_text(source)
++                cooked=preprocess(raw,Flags(includes=[root/"include"]),dict(os.environ),
++                                  os.environ["KHDAYS_TEST_EMCC"],backend="clang")
++                output=folder/(name+".c");output.write_text(rewrite_text(cooked,name+".c",index));outputs.append(str(output))
++            # Native table keeps the pinned initializer + exact void(void) type.
++            # Its symbol alone is relocated so the fixture can provide a full
++            # DTCM backing region for the real callback's +0x3ff8 flag word.
++            table=(root/"libs/nitro/os/auto/os_irq_table_027e0000.c").read_text().replace("data_027e0000","fixture_irq_table")
++            (folder/"table.c").write_text(table);(folder/"main.c").write_text(main)
++            result=folder/"irq.cjs"
++            subprocess.run([os.environ["KHDAYS_TEST_EMCC"],"-std=c17","-O0","-I",str(folder),"-I",str(root/"include"),
++                            *outputs,str(folder/"table.c"),str(root/"libs/nitro/os/auto/os_irq_callback_bits.c"),
++                            str(folder/"main.c"),"-sENVIRONMENT=node","-sSINGLE_FILE=1","-sWASM_ASYNC_COMPILATION=0",
++                            "-sEXIT_RUNTIME=1","-Werror","-Wno-unknown-pragmas","-Wno-parentheses-equality",
++                            "-Wl,--fatal-warnings","-o",str(result)],check=True)
++            subprocess.run([os.environ.get("KHDAYS_TEST_NODE","node"),str(result)],check=True)
++
++
++if __name__=="__main__":unittest.main()

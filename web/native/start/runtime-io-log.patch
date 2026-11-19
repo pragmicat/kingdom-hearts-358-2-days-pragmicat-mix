@@ -1,0 +1,308 @@
+diff --git a/port/runtime/core/events.c b/port/runtime/core/events.c
+index da3fcf2..69457ce 100644
+--- a/port/runtime/core/events.c
++++ b/port/runtime/core/events.c
+@@ -18,7 +18,9 @@
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
++#if !defined(KHDAYS_BROWSER)
+ #include <windows.h>
++#endif
+ 
+ static u64 last_update;
+ static u64 alarm_at; /* the cycle timer 1 would overflow at (khdays_alarm_set_after) */
+@@ -299,6 +301,12 @@ void khdays_runtime_wait(void)
+     profile_wait(enter);
+     if (log_wait_end != 0 && enter - log_wait_end > KHDAYS_CLOCK_HZ / 20 && khdays_log_on()) {
+         /* the session log: over 50 ms without a wait (so without a frame), and in which scene */
++#if defined(KHDAYS_BROWSER)
++        khdays_files_log_reads();
++        khdays_log("stall: %.0f ms without a wait, scene %u",
++                   (enter - log_wait_end) * 1000.0 / KHDAYS_CLOCK_HZ,
++                   *(const volatile u32 *)KHDAYS_W(0x0204bdb0));
++#else
+         /* the memory free then: a PC short of it pages, and the game's thread waits on the disk */
+         MEMORYSTATUSEX memory;
+         memory.dwLength = sizeof(memory);
+@@ -309,6 +317,7 @@ void khdays_runtime_wait(void)
+         khdays_log("stall: %.0f ms without a wait, scene %u, %llu MB of memory free",
+                    (enter - log_wait_end) * 1000.0 / KHDAYS_CLOCK_HZ, *(const volatile u32 *)KHDAYS_W(0x0204bdb0),
+                    (unsigned long long)(memory.ullAvailPhys >> 20));
++#endif
+     }
+     for (;;) {
+         khdays_events_update();
+diff --git a/port/runtime/core/files.c b/port/runtime/core/files.c
+index 9388eab..5725b91 100644
+--- a/port/runtime/core/files.c
++++ b/port/runtime/core/files.c
+@@ -8,44 +8,77 @@
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
++#if defined(KHDAYS_BROWSER)
++#include <emscripten.h>
++typedef double ReadTicks;
++#else
+ #include <windows.h>
++typedef LONGLONG ReadTicks;
++#endif
+ 
+ static int mode = -1;
+ static u32 reads, bytes;
+-static LONGLONG ticks; /* QueryPerformanceCounter's, spent reading */
++static ReadTicks ticks;
+ 
+ /* The session log's reads, gathered by file until the next line is due (once a second, or before a
+  * stall's line): one line per file, in the order first read. */
++#if !defined(KHDAYS_BROWSER)
+ static SRWLOCK gathered_lock = SRWLOCK_INIT;
++#endif
+ static struct Gathered {
+     char name[160];
+     u32 start; /* the file's (or part's) place in the image: the key */
+     u32 first; /* where in it the first read began */
+     u32 reads, bytes;
+-    LONGLONG ticks;
++    ReadTicks ticks;
+ } gathered[48];
+ static int gathered_count;
+ 
++static ReadTicks read_ticks(void)
++{
++#if defined(KHDAYS_BROWSER)
++    return emscripten_get_now();
++#else
++    LARGE_INTEGER now;
++    QueryPerformanceCounter(&now);
++    return now.QuadPart;
++#endif
++}
++
++static double milliseconds_per_tick(void)
++{
++#if defined(KHDAYS_BROWSER)
++    return 1.0;
++#else
++    LARGE_INTEGER frequency;
++    QueryPerformanceFrequency(&frequency);
++    return 1000.0 / (double)frequency.QuadPart;
++#endif
++}
++
+ static void log_gathered_locked(void)
+ {
+-    LARGE_INTEGER f;
+-    QueryPerformanceFrequency(&f);
++    const double scale = milliseconds_per_tick();
+     for (int n = 0; n < gathered_count; ++n) {
+         const struct Gathered *g = &gathered[n];
+         khdays_log("read %s from +0x%x: %u bytes in %u reads, %.2f ms", g->name, g->first, g->bytes, g->reads,
+-                   (double)g->ticks * 1000.0 / (double)f.QuadPart);
++                   (double)g->ticks * scale);
+     }
+     gathered_count = 0;
+ }
+ 
+ void khdays_files_log_reads(void)
+ {
++#if !defined(KHDAYS_BROWSER)
+     AcquireSRWLockExclusive(&gathered_lock);
++#endif
+     log_gathered_locked();
++#if !defined(KHDAYS_BROWSER)
+     ReleaseSRWLockExclusive(&gathered_lock);
++#endif
+ }
+ 
+-static void log_read(u32 src, u32 len, LONGLONG spent)
++static void log_read(u32 src, u32 len, ReadTicks spent)
+ {
+     char name[160];
+     u32 start = src, end = src + len;
+@@ -54,7 +87,9 @@ static void log_read(u32 src, u32 len, LONGLONG spent)
+         snprintf(name, sizeof(name), "(the image's 0x%08x)", src);
+         start = src;
+     }
++#if !defined(KHDAYS_BROWSER)
+     AcquireSRWLockExclusive(&gathered_lock);
++#endif
+     for (int n = 0; n < gathered_count && g == NULL; ++n) {
+         if (gathered[n].start == start) {
+             g = &gathered[n];
+@@ -74,7 +109,9 @@ static void log_read(u32 src, u32 len, LONGLONG spent)
+     ++g->reads;
+     g->bytes += len;
+     g->ticks += spent;
++#if !defined(KHDAYS_BROWSER)
+     ReleaseSRWLockExclusive(&gathered_lock);
++#endif
+ }
+ 
+ int khdays_files_mode(void)
+@@ -97,15 +134,14 @@ int khdays_files_mode(void)
+ 
+ void khdays_files_read(u32 src, void *dst, u32 len)
+ {
+-    LARGE_INTEGER t0, t1;
+-    QueryPerformanceCounter(&t0);
++    const ReadTicks before = read_ticks();
+     khdays_rom_read(src, (u8 *)dst, len);
+-    QueryPerformanceCounter(&t1);
+-    ticks += t1.QuadPart - t0.QuadPart;
++    const ReadTicks spent = read_ticks() - before;
++    ticks += spent;
+     ++reads;
+     bytes += len;
+     if (khdays_log_on() && len != 0) { /* the game also asks for 0 bytes at a file's end */
+-        log_read(src, len, t1.QuadPart - t0.QuadPart);
++        log_read(src, len, spent);
+     }
+ }
+ 
+@@ -125,14 +161,12 @@ void khdays_files_card_page(u32 address, u8 *page)
+ void khdays_files_second(void)
+ {
+     u32 card_commands, card_bytes;
+-    LARGE_INTEGER f;
+     khdays_card_reads(&card_commands, &card_bytes);
+     if (reads == 0 && card_commands == 0) {
+         return;
+     }
+-    QueryPerformanceFrequency(&f);
+     fprintf(stderr, "files: %u reads, %u bytes, %.1f ms; card: %u commands, %u bytes, in the last second\n", reads,
+-            bytes, (double)ticks * 1000.0 / (double)f.QuadPart, card_commands, card_bytes);
++            bytes, (double)ticks * milliseconds_per_tick(), card_commands, card_bytes);
+     reads = bytes = 0;
+     ticks = 0;
+ }
+diff --git a/port/runtime/core/session_log.c b/port/runtime/core/session_log.c
+index 3d833e6..e7a063c 100644
+--- a/port/runtime/core/session_log.c
++++ b/port/runtime/core/session_log.c
+@@ -6,6 +6,119 @@
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
++
++#if defined(KHDAYS_BROWSER)
++#include <emscripten.h>
++
++/* The cooperative host writes diagnostics to its local console. Keep the
++ * existing opt-in setting without growing files in the persistent save mount. */
++static size_t remaining_bytes = 2u * 1024u * 1024u;
++static double started_ms;
++static u32 frame;
++static u32 marks;
++static int enabled;
++static int wanted;
++static int opened_for_setting;
++
++static void open_now(void)
++{
++    if (remaining_bytes != 0) {
++        started_ms = emscripten_get_now();
++        enabled = 1;
++    }
++}
++
++void khdays_log_open(void)
++{
++    const char *setting = getenv("KHDAYS_LOG");
++    int on = wanted;
++#if defined(_DEBUG)
++    on = on || setting == NULL || strcmp(setting, "0") != 0;
++#else
++    on = on || (setting != NULL && strcmp(setting, "1") == 0);
++#endif
++    if (on && !enabled) {
++        open_now();
++        opened_for_setting = 0;
++    }
++}
++
++void khdays_log_want(int on)
++{
++    wanted = on != 0;
++    if (wanted && !enabled) {
++        open_now();
++        opened_for_setting = enabled;
++    } else if (!wanted && opened_for_setting) {
++        khdays_log_close();
++        opened_for_setting = 0;
++    }
++}
++
++int khdays_log_on(void)
++{
++    return enabled;
++}
++
++void khdays_log_frame(u32 value)
++{
++    frame = value;
++}
++
++void khdays_log(const char *format, ...)
++{
++    char message[960];
++    char line[1024];
++    va_list args;
++    if (!enabled) {
++        return;
++    }
++    va_start(args, format);
++    const int written = vsnprintf(message, sizeof(message), format, args);
++    va_end(args);
++    if (written < 0) {
++        return;
++    }
++    int result = snprintf(line, sizeof(line), "%9.3f f%-6u %s\n",
++                          (emscripten_get_now() - started_ms) / 1000.0, frame, message);
++    if (result < 0 || (size_t)result >= sizeof(line)) {
++        return;
++    }
++    const size_t size = (size_t)result;
++    if (size <= remaining_bytes) {
++        remaining_bytes -= size;
++        fputs(line, stderr);
++    } else {
++        remaining_bytes = 0;
++    }
++    if (remaining_bytes == 0) {
++        enabled = 0;
++        fputs("khdays-browser: session log limit reached\n", stderr);
++    }
++}
++
++void khdays_log_mark(void)
++{
++    if (enabled) {
++        khdays_log("mark %u (F12)", ++marks);
++        fflush(stderr);
++    }
++}
++
++u32 khdays_log_marks(void)
++{
++    return marks;
++}
++
++void khdays_log_close(void)
++{
++    if (enabled) {
++        enabled = 0;
++        fflush(stderr);
++    }
++}
++
++#else
+ #include <windows.h>
+ 
+ static FILE *file;
+@@ -190,3 +303,4 @@ void khdays_log_close(void)
+         ReleaseSRWLockExclusive(&lock);
+     }
+ }
++#endif

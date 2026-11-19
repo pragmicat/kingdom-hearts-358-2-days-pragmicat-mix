@@ -1,0 +1,15 @@
+{
+  "upstream_commit": "2037f79a171524eafcf40a1d641b16da14667a64",
+  "emscripten": "4.0.23",
+  "full_game_boot_verified": false,
+  "scope": [
+    "port/runtime/input/input.c"
+  ],
+  "sha256": {
+    "README.md": "31368509bcd1e13194d288be8c84ec92c1a41041efee0b27fd24a9963914aeea",
+    "UPSTREAM_LICENSE.txt": "10dbb3b24b7d9665e26d9265d53af1de21fc77690713b065d147723f1a0b6345",
+    "runtime-input.patch": "04f1bca81337ddb07f00cf2d777fec977e1c303aad7d097b175bb3cda4ceda04",
+    "tests/input_smoke.c": "c1d8e53e1f01ab1c2ae76f9c677cb2e18de73e2d30f932d22b5bc4f21f3db730",
+    "tests/run_tests.py": "3a87e13eda43425cd17053127ab74921d7941cc528d04ade1f129d30edb93136"
+  }
+}

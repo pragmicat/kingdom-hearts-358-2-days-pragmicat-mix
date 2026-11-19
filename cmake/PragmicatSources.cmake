@@ -1,0 +1,11 @@
+set(PRAGMICAT_COMBAT_SOURCES
+    src/combat.cpp
+    src/limit_finishers.cpp
+    src/combat_motion.cpp
+    src/combat_rules.cpp
+    src/drive_form.cpp
+    src/animation_links.cpp
+    src/drive_hud.cpp
+    src/practice_boot.cpp
+    src/weapon_animation.cpp
+)

@@ -1,0 +1,20 @@
+{
+  "upstream_commit": "2037f79a171524eafcf40a1d641b16da14667a64",
+  "emscripten": "4.0.23",
+  "full_game_boot_verified": false,
+  "production_upstream_copies_included": false,
+  "sha256": {
+    "README.md": "dc22e91fbc13076a6742d56d1bfb64335a02cb2a9785cdbfd58d678403b7eb71",
+    "UPSTREAM_LICENSE.txt": "10dbb3b24b7d9665e26d9265d53af1de21fc77690713b065d147723f1a0b6345",
+    "prepare-integration.patch": "ef2f50ddfef8fd475d1a053199860605b818068869771f9f6c0ed3d4e3534c6c",
+    "static-registry.patch": "3554e85476990af039529da261f15e81737f35a213227ccf7bf5bbafc477e111",
+    "tests/fixture_memory.h": "95014afe122eef7bae5670582b4cc7c5f71535c3afa6725dd182dda4e8cd4d13",
+    "tests/prepare_gate_test.py": "eaac9403ab42aceac7816ec86c16e523b96e2d48e479227fe2ed88e13455fc45",
+    "tests/run_tests.py": "a29807a74de349e422e89f54753afc4ec2bf31da418958b7fde79fc77c65d0a6",
+    "tests/runtime_test.c": "e9f056e18719ffa4580ae3b793cbb19e719dd9a497b3569b2d6276e9c82100af",
+    "tests/support/windows.h": "7658755f08e2f8e13ead7a271df239451fbd07eb8f18497fb1402f97659a4270",
+    "tests/test_generator.py": "f5aad4523fc95c5eefe2627a6e0b8b23cbceb4b3f73abc24249d17fc70a55d88",
+    "tests/tu_alpha.c": "8b85bb4fcb026daed9d8665559a05e68f3433d30b3da8dae8fa837adfac78d9f",
+    "tests/tu_beta.c": "63457147ba3e83f1fb87ed231bdb84baf42b09870ce9cdd81bff6e8b0ee6c7dd"
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "upstream_commit": "2037f79a171524eafcf40a1d641b16da14667a64",
+  "decomp_commit": "93535afd7ca082f3d856bbf1cadae65be16d44ba",
+  "emscripten": "4.0.23",
+  "whole_game_generation_passed": false,
+  "sha256": {
+    "README.md": "f796dc4b5d3e78a0a9fff4c997662f4ae51985029fbf35b850822c2f1162b098",
+    "UPSTREAM_LICENSE.txt": "10dbb3b24b7d9665e26d9265d53af1de21fc77690713b065d147723f1a0b6345",
+    "abi/tests/abi_dispatch_test.c": "73d1f5dc67f793b8c580627249c98280b8767cba4d38a48c938f2f1802d2afe2",
+    "abi/tests/run_tests.py": "af2957cbabb2f50f0fa3a7c95fe9f48762c2cffd716bddaa75e60e16e2dcece3",
+    "abi/tests/test_wasm_abi.py": "53f2def835ca0198160851ff3817f6cdd586ee1d21e151fbb229c3efbd327f0b",
+    "tests/original_combo_test.c": "54e33569a23fdba37cf18e7e2e4b7b98f2679cd2aae6c546f4219b311e3a9638",
+    "tests/run_compiler_tests.py": "7762c285391b57329fb55aef71c514b31a3c75b0619ba955114577bf493304ef",
+    "upstream-compiler.patch": "40524ca2e0d6a14ab0ef39b5aa13e01ce0f77fb6c9a7246d575063d52998d29f"
+  }
+}
