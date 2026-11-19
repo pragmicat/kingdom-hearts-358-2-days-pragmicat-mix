@@ -148,6 +148,12 @@ from their owning lists.
 actual signature of its UTF-16 character reader. The reader advances its
 cursor by one code unit and returns that unit through the installed callback.
 
+`signed-division-quotient.patch` restores the CodeWarrior signed division
+helper's two results on wasm32. Callers that declare a 32-bit integer read the
+quotient. Callers that declare the full 64-bit result also receive the remainder.
+The mission-results digit routine ran against the real helper in WebAssembly.
+Dividing the most negative 32-bit integer by -1 produces the ARM result.
+
 The resumed whole-game run with the initial discarded-return repair emitted
 21,869 files. It reported additional incompatible returns and callback
 signatures before it could write `sources.cmake`.

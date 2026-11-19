@@ -1,0 +1,67 @@
+diff --git a/port/hal/sdk_runtime.c b/port/hal/sdk_runtime.c
+index b041e48..37e982f 100644
+--- a/port/hal/sdk_runtime.c
++++ b/port/hal/sdk_runtime.c
+@@ -9,7 +9,10 @@ u64 func_02020400(s32 numerator, s32 denominator)
+ {
+     s32 quotient = numerator;
+     s32 remainder = 0;
+-    if (denominator != 0) {
++    if (denominator == -1) {
++        /* The ARM negation wraps for INT_MIN. Wasm signed division would trap. */
++        quotient = (s32)(0u - (u32)numerator);
++    } else if (denominator != 0) {
+         quotient = numerator / denominator;
+         remainder = numerator % denominator;
+     }
+diff --git a/port/tools/references/emit.py b/port/tools/references/emit.py
+index 9ea29e1..02ae9e5 100644
+--- a/port/tools/references/emit.py
++++ b/port/tools/references/emit.py
+@@ -597,6 +597,19 @@ class Emitter(c_generator.CGenerator):
+                     self.return_mismatch(callee.name, self.symbol(callee).type))
+         if mismatch and not self.discarded(node):
+             defined = self.index.discarded_returns[callee.name]
++            # CodeWarrior _s32_div_f returns the quotient in r0 and remainder
++            # in r1. A caller declaring a 32-bit integer reads only r0. Keep
++            # the HAL's real i64 call, then narrow to the caller's own type.
++            if callee.name == "func_02020400" and defined == "i64":
++                symbol = self.symbol(callee)
++                function = symbol.type
++                words = {"int", "unsigned int", "long", "unsigned long"}
++                if ("static" not in symbol.storage and callee.name not in self.index.dispatched
++                        and not function.variadic and function.params is not None
++                        and len(function.params) == 2 and node.args is not None and len(node.args.exprs) == 2
++                        and all(isinstance(t, Arithmetic) and t.spelling in words
++                                for t in (function.result, *function.params))):
++                    return f"(({self.decl(function.result)})(unsigned int)({self.call(node)}))"
+             raise EmitFailure(node, f"wasm32 ABI: {callee.name}: used return value differs from defined {defined}")
+         call = self.call(node)
+         return f"((void)({call}))" if mismatch else call
+diff --git a/port/tools/references_wasm_returns_test.py b/port/tools/references_wasm_returns_test.py
+index 0ef151c..a1862f4 100644
+--- a/port/tools/references_wasm_returns_test.py
++++ b/port/tools/references_wasm_returns_test.py
+@@ -44,6 +44,22 @@ class DiscardedReturns(unittest.TestCase):
+         with self.assertRaisesRegex(EmitFailure, "used return value"):
+             self.rewrite("extern double target(void); double caller(void){return target();}", "i32")
+
++    def test_signed_division_word_callers_keep_their_own_integer_type(self):
++        name = "func_02020400"
++        index = Index(game_functions={name, "caller"}, discarded_returns={name: "i64"})
++        for typ in ("int", "unsigned int"):
++            source = f"extern {typ} {name}(int,int); long long caller(void){{return {name}(-7,2);}}"
++            output = rewrite_text(source, "src/caller.c", index)
++            self.assertIn(f"extern long long {name}(", output)
++            self.assertIn(f"(({typ})(unsigned int)(", output)
++        for signature in ("float (int,int)", "int (long long,int)", "int ()", "int (int,...)"):
++            decl = signature.replace("(", name + "(")
++            with self.subTest(signature=signature), self.assertRaisesRegex(EmitFailure, "used return value"):
++                rewrite_text(f"extern {decl}; int caller(void){{return {name}(1,2);}}", "src/caller.c", index)
++        with self.assertRaisesRegex(EmitFailure, "taken by address"):
++            rewrite_text(f"extern int {name}(int,int); void caller(void){{int (*p)(int,int)={name};}}",
++                         "src/caller.c", index)
++
+     def test_same_tu_definition_keeps_its_real_scalar_spelling(self):
+         output = self.rewrite("extern void target(void); void caller(void){target();}"
+                               "unsigned char target(void){return 7;}", "i32")
