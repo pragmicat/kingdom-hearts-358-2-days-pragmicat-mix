@@ -1,0 +1,24 @@
+diff --git a/port/tools/prepare.py b/port/tools/prepare.py
+--- a/port/tools/prepare.py
++++ b/port/tools/prepare.py
+@@ -920,4 +920,20 @@
+             "    gPadHeld.prev = gPadHeld.cont;\n",
+         )
++    ],
++    "main@0200aeec": [  # FSi_ReadRomCallback: register the typed ROM transfer completion.
++        ("extern int CARDi_ReadRom(int a, int b, int c, int d, int e, int f, int g);",
++         "extern void CARDi_ReadRom(unsigned dma, const void *src, void *dst, unsigned len,\n"
++         "                          void (*completed)(void *), void *argument, int async);"),
++        ("extern int FSi_OnRomReadDone();", "extern void FSi_OnRomReadDone(void *archive);"),
++        ("extern int *data_0204631c[];", "extern unsigned data_0204631c[];"),
++        ("int FSi_ReadRomCallback(int a, int b, int c, int d) {",
++         "int FSi_ReadRomCallback(void *archive, void *dst, unsigned offset, unsigned length) {"),
++        ("CARDi_ReadRom((int)data_0204631c[1], c, b, d, (int)FSi_OnRomReadDone, a, 1);",
++         "CARDi_ReadRom(data_0204631c[1], (const void *)offset, dst, length, FSi_OnRomReadDone, archive, 1);"),
++    ],
++    "main@0200e154": [  # CARD_LockBackup: original owner, backup target and void lock API.
++        ("extern void *CARDi_LockResource();", "extern void CARDi_LockResource(int owner, int target);"),
++        ("void *CARD_LockBackup(int id) {\n    return CARDi_LockResource(id, 2);",
++         "void CARD_LockBackup(int id) {\n    CARDi_LockResource(id, 2);"),
+     ],
+     # The game's ROM reads answered by the port (runtime/core/files.h): every read reaches

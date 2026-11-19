@@ -148,6 +148,9 @@ Initialize its pinned decompilation submodule before source generation.
 20. `compiler/key-repeat-quotient-lowword.patch`
 21. `compiler/pxi-init-void-contract.patch`
 22. `compiler/irq-eight-void-veneers.patch`
+23. `compiler/sleep-alarm-void-contract.patch`
+24. `compiler/card-transfer-contracts.patch`
+25. `compiler/allocator-free-contracts.patch`
 
 Run the upstream generator with the Emscripten SDK active:
 

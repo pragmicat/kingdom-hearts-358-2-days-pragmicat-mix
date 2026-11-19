@@ -1,0 +1,35 @@
+diff --git a/port/tools/prepare.py b/port/tools/prepare.py
+--- a/port/tools/prepare.py
++++ b/port/tools/prepare.py
+@@ -4167,1 +4167,31 @@
++# NitroSystem allocator tables dispatch free(allocator, block), including
++# frame heaps whose individual free is intentionally empty. transform() has
++# already expanded that empty bx-lr body into the generic return-r0 form.
++for _kind, _dir in (("Exp", "libs/nitro/nns/calls"), ("Unit", "libs/nns/fnd/calls")):
++    FILE_HOOKS[f"{_dir}/AllocatorFreeFor{_kind}Heap.c"] = [
++        (f"extern void *NNS_FndFreeTo{_kind}Heap();",
++         f"extern void NNS_FndFreeTo{_kind}Heap(void *heap, void *block);"),
++        (f"void *AllocatorFreeFor{_kind}Heap(void **allocator, void *block) {{",
++         f"void AllocatorFreeFor{_kind}Heap(void *allocator, void *block) {{"),
++        (f"return NNS_FndFreeTo{_kind}Heap(allocator[1], block);",
++         f"NNS_FndFreeTo{_kind}Heap(((void **)allocator)[1], block);"),
++    ]
++
++FILE_HOOKS["libs/nns/fnd/auto/AllocatorFreeForFrmHeap.c"] = [
++    ("void *AllocatorFreeForFrmHeap(void *khdays_r0) { return khdays_r0; }  /* bx lr: r0 unchanged */",
++     "void AllocatorFreeForFrmHeap(void *allocator, void *block) { (void)allocator; (void)block; }"),
++]
++
++# These packed relocation pairs precede an unrelated graphics table. Keep
++# the table order and data layout; give only the four allocator slots their
++# real argument and return classes when their function references are taken.
++FILE_HOOKS["src/engine/data/main_pointers_02041924.c"] = []
++for _kind in ("Exp", "SDK"):
++    FILE_HOOKS["src/engine/data/main_pointers_02041924.c"].extend([
++        (f"extern void AllocatorAllocFor{_kind}Heap(void);",
++         f"extern void *AllocatorAllocFor{_kind}Heap(void *allocator, unsigned size);"),
++        (f"extern void AllocatorFreeFor{_kind}Heap(void);",
++         f"extern void AllocatorFreeFor{_kind}Heap(void *allocator, void *block);"),
++    ])
++
+ FILE_HOOKS["src/overlays/scenes/ov002_field/Ov002_SetCaptionText.c"] = [

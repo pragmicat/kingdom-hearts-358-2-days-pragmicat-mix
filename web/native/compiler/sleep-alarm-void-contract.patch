@@ -1,0 +1,14 @@
+diff --git a/port/tools/prepare.py b/port/tools/prepare.py
+--- a/port/tools/prepare.py
++++ b/port/tools/prepare.py
+@@ -189,4 +189,10 @@
+ # match its current source.
+ HOOKS = {
++    "main@02002178": [  # OSi_SleepAlarmCallback: OSAlarmHandler takes one argument and returns void.
++        ("extern void *OS_WakeupThreadDirect();", "extern void OS_WakeupThreadDirect(char *thread);"),
++        ("void *OSi_SleepAlarmCallback(char **slot) {",
++         "void OSi_SleepAlarmCallback(void *arg) {\n    void **slot = arg;"),
++        ("    return OS_WakeupThreadDirect(thread);", "    OS_WakeupThreadDirect(thread);"),
++    ],
+     # The wireless layer's teardown loops: they spin on wh.c's
+     # system state, which only the wireless interrupt advances; while it is

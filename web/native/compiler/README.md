@@ -107,11 +107,34 @@ FIFO initializer once.
 the real interrupt table and `OSi_IrqCallback`. WebAssembly dispatch through
 the original table type confirms the slot order, one-shot clearing, rearming,
 interrupt flags and disable masks.
+`sleep-alarm-void-contract.patch` gives the original sleep alarm handler its
+one-argument, void callback signature. The original Wasm alarm queue dispatches
+the handler with the sleeping thread's slot, clears both sleep references and
+resumes that thread once. Run this focused check after applying the patch:
+
+```sh
+python3 tests/run_sleep_alarm.py --upstream /tmp/days-recomp --emcc /path/to/emcc
+```
+
+`card-transfer-contracts.patch` fixes two more original callers. The file system
+passes its actual one-argument completion handler and archive to the native ROM
+transfer. The backup lock still takes the caller's ID and backup target 2.
+A focused Wasm link and dispatch check exercised the async request arguments,
+both completion statuses and the lock arguments using fixture card services.
+
+`allocator-free-contracts.patch` gives the expandable and unit heap free
+wrappers the two-argument void contract used by the game's allocator tables.
+The frame heap's individual free accepts the same two arguments and does
+nothing. Both callbacks in each expandable/SDK pair have typed declarations
+where the original table takes their addresses. One Wasm run dispatched
+through both original tables, verified the original unit heap free-list push,
+checked the expandable/SDK arguments and kept the frame heap intact. Emerald
+Serenade's similarly labelled routine belongs to its AI state dispatch.
 
 The resumed whole-game run with the initial discarded-return repair emitted
 21,869 files. It reported additional incompatible returns and callback
-signatures before it could write `sources.cmake`. Remaining examples include
-the sleep alarm callback and the allocator free callbacks' vtable signatures.
+signatures before it could write `sources.cmake`. Further reported blockers include
+graphics bank and sequencer wrappers that forward return values from void calls.
 Rerun with the exact source repairs above, using the existing preprocessing
 cache. Gameplay testing still needs a complete rewrite, full link and cartridge
 boot.
