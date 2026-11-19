@@ -131,6 +131,12 @@ through both original tables, verified the original unit heap free-list push,
 checked the expandable/SDK arguments and kept the frame heap intact. Emerald
 Serenade's similarly labelled routine belongs to its AI state dispatch.
 
+`vram-callback-contracts.patch` aligns the default texture and palette
+allocators and the installed frame palette callbacks with the engine's
+indirect calls. A focused Wasm dispatch check exercised the default table,
+allocation from both ends of the frame palette, release, and rejection of
+an allocation larger than the remaining space.
+
 The resumed whole-game run with the initial discarded-return repair emitted
 21,869 files. It reported additional incompatible returns and callback
 signatures before it could write `sources.cmake`. Further reported blockers include

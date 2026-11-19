@@ -1,0 +1,32 @@
+diff --git a/port/tools/prepare.py b/port/tools/prepare.py
+--- a/port/tools/prepare.py
++++ b/port/tools/prepare.py
+@@ -4195,2 +4195,28 @@
+     ])
++
++# G3dRes_DefaultSetup calls both installed allocators as key(size, flag, opt)
++# and their free routines as int(key). Frame palette setup and the startup
++# fallback table must install functions with those exact callable types.
++FILE_HOOKS["libs/nns/gfd/calls/NNS_GfdInitFrmPlttVramManager.c"] = [
++    ("extern void *data_020423f4;", "extern unsigned (*data_020423f4)(unsigned, int, unsigned);"),
++    ("extern void *data_020423f8;", "extern int (*data_020423f8)(unsigned);"),
++    ("extern void func_020111c0(void);", "extern unsigned func_020111c0(unsigned size, int four, unsigned from);"),
++    ("extern void NNS_GfdFreeFrmPlttVram(void);", "extern int NNS_GfdFreeFrmPlttVram(unsigned key);"),
++    ("NNS_GfdResetFrmPlttVramState(int value);", "NNS_GfdResetFrmPlttVramState(void);"),
++    ("NNS_GfdResetFrmPlttVramState(value);", "NNS_GfdResetFrmPlttVramState();"),
++]
++FILE_HOOKS["libs/nns/gfd/auto/NNS_GfdFreeFrmPlttVram.c"] = [
++    ("NNS_GfdFreeFrmPlttVram(void)", "NNS_GfdFreeFrmPlttVram(unsigned key)"),
++]
++
++_gfd_defaults = FILE_HOOKS["src/engine/data/main_pointers_020423ec.c"] = []
++for _resource in ("Tex", "Pltt"):
++    for _operation, _result, _args in (
++        ("Alloc", "unsigned", "unsigned size, int flag, unsigned opt"),
++        ("Free", "int", "unsigned key"),
++    ):
++        _stub = f"Gfd_Default{_operation}{_resource}Vram"
++        _signature = f"{_result} {_stub}({_args})"
++        _gfd_defaults.append((f"extern void {_stub}(void);", f"extern {_signature};"))
++        FILE_HOOKS[f"libs/nns/gfd/auto/{_stub}.c"] = [(f"int {_stub}(void)", _signature)]
+ 

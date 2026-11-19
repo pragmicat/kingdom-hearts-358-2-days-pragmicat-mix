@@ -151,6 +151,7 @@ Initialize its pinned decompilation submodule before source generation.
 23. `compiler/sleep-alarm-void-contract.patch`
 24. `compiler/card-transfer-contracts.patch`
 25. `compiler/allocator-free-contracts.patch`
+26. `compiler/vram-callback-contracts.patch`
 
 Run the upstream generator with the Emscripten SDK active:
 
