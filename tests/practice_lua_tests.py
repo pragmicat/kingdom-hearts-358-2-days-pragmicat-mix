@@ -385,20 +385,21 @@ test('Endless Heartless refills individual losses without removing surviving ene
 end)
 test('endless waves cycle all native groups and continue past an entire rotation',function()
   local c=boot(); c.choose(5); c.options.flow.value=2; c.options.after_clear.value=2; c.step(110)
-  local saw={}; local largest=0
-  for wave=1,7 do
+  local rotation={{4,4,0},{1,1},{41},{4,1,0}}
+  for wave=1,8 do
     c.options.status.on_change(); assert(c.last_notice:find('Endless wave '..wave..'.',1,true))
-    local expected=({3,2,1})[(wave-1)%3+1]
-    assert(#c.live==expected)
-    saw[c.made[#c.made].kind]=true
+    local kinds=rotation[(wave-1)%#rotation+1]
+    assert(#c.live==#kinds)
+    if wave%4==0 then assert(c.last_notice:find('Ground and air',1,true)) end
+    for i,kind in ipairs(kinds) do assert(c.made[#c.made-#kinds+i].kind==kind) end
     -- Each wave contains two sets of its bounded group; killing the first set
     -- causes continuous replacements rather than advancing immediately.
-    c.clear(); c.step(expected*31+5); assert(#c.live==expected)
-    largest=math.max(largest,#c.live)
+    c.clear(); c.step(#kinds*31+5); assert(#c.live==#kinds)
+    for i,kind in ipairs(kinds) do assert(c.made[#c.made-#kinds+i].kind==kind) end
     c.clear(); c.step(40)
   end
-  assert(saw[0] and saw[1] and saw[41] and largest==3 and c.holds and c.held_defeat)
-  c.options.status.on_change(); assert(c.last_notice:find('Endless wave 8.',1,true))
+  assert(c.holds and c.held_defeat)
+  c.options.status.on_change(); assert(c.last_notice:find('Endless wave 9.',1,true))
   assert(not c.last_notice:find('Restart encounter',1,true)) -- manual-after-clear is a drill-only choice
 end)
 test('endless arrivals leave room for Roxas and moving survivors on authored pads',function()

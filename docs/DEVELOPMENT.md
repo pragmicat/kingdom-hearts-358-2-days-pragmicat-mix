@@ -17,8 +17,8 @@ the import flow has Node coverage and still needs validation with a real cartrid
 The latest gameplay pass carries the aimed enemy through a multi-target launcher
 or aerial sweep, and a fresh Technique tap survives the handoff between a
 committed Light and its next swing. Endless reinforcements pick an open arena
-pad if their usual one is crowded. Clearing a wave announces the next group
-during the break. Drive uses directional marks when a form change is pending.
+pad if their usual one is crowded. The fourth wave combines ground and aerial
+targets. Clearing a wave announces the next group during the break. Drive uses directional marks when a form change is pending.
 The Wasm mod publishes that same native HUD to Canvas between the two screens.
 Browser gamepad attacks carry their input source through the combo buffer.
 Confirmed melee damage can trigger one optional pulse per swing. Practice cues

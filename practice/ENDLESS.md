@@ -11,8 +11,13 @@ contains two sets of its group, then advances automatically:
 | Ground | 3 | 6 |
 | Aerial | 2 | 4 |
 | Armored | 1 | 2 |
+| Ground and air | 3 | 6 |
 
-The groups repeat without a final wave. Clearing a wave announces the next
+The fourth wave opens with a ground attacker on the left, a flier on the
+right, and another ground target behind them. You can pursue the flier while
+the ground pair stays in play, or clear space on the floor first.
+
+The four groups repeat without a final wave. Clearing a wave announces the next
 group during the short break before it enters. **Encounter status** shows the
 wave, active targets and total targets cleared in the current run. A replacement
 can enter every 30 active frames. Each arrival uses its usual floor position

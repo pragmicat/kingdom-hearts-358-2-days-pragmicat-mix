@@ -1,14 +1,17 @@
 -- Loaded only by the launcher's separate practice profile. Native 0.1.5 ABI reads are guards only.
 local MISSION, FILE = 3595, 20000
 local HOME = { 0, 0.049, 0 }
+local GROUND = { { 4, -2, -3, 3.5 }, { 4, 2, -3, 3.5 }, { 0, 0, -5, 4 } }
+local AERIAL = { { 1, -2, -3, 4 }, { 1, 2, -3, 4 } }
 local GROUPS = {
-  { { 4, -2, -3, 3.5 }, { 4, 2, -3, 3.5 }, { 0, 0, -5, 4 } },
-  { { 1, -2, -3, 4 }, { 1, 2, -3, 4 } },
+  GROUND, AERIAL,
   { { 41, 0, -4, 1.5 } },
   { { 4, 0, -3, 8 } },
+  { GROUND[1], AERIAL[2], GROUND[3] },
 }
-local GROUP_NAMES = { "Ground encounter", "Aerial encounter", "Armored target", "Single ground target" }
-local ENDLESS_PADS = { GROUPS[1][1], GROUPS[1][2], GROUPS[1][3], GROUPS[3][1] }
+local GROUP_NAMES = { "Ground encounter", "Aerial encounter", "Armored target", "Single ground target", "Ground and air" }
+local ENDLESS_GROUPS = { 1, 2, 3, 5 }
+local ENDLESS_PADS = { GROUND[1], GROUND[2], GROUND[3], GROUPS[3][1] }
 local CONTROL_PAGES = {
   "1/4 ATTACKS: Attack=Light. X+direction=Technique; directions follow your target.",
   "2/4 FINISHERS: Hold Light, press Technique: Toward=Rush; Away=Burst; neutral/side=Flurry.",
@@ -62,7 +65,7 @@ end
 local mode = mod.option{
   key = "targets", kind = "choice", label = "Target preset", default = 1,
   values = { "Mixed encounters", "Single ground target", "Aerial targets", "Armored target", "Endless Heartless" },
-  description = "Endless refills defeated Heartless through ground, aerial and armored waves. At most three enemies stay active. Changing the preset restarts this encounter.",
+  description = "Endless cycles ground, aerial, armored, then combined ground-and-air waves. At most three enemies stay active. Changing the preset restarts this encounter.",
   on_change = function() reset_requested = true end,
 }
 local durability = mod.option{
@@ -122,6 +125,7 @@ local function group_index()
   if mode.value == 2 then return 4 end
   if mode.value == 3 then return 2 end
   if mode.value == 4 then return 3 end
+  if mode.value == 5 then return ENDLESS_GROUPS[(run.wave - 1) % #ENDLESS_GROUPS + 1] end
   return run.cycle
 end
 local function cleared_notice()
@@ -274,8 +278,9 @@ local function step_endless(x, z)
   -- while the other enemies remain alive; no survivor is removed or duplicated.
   if run.endless_spawned >= #group * 2 and #targets == 0 then
     local finished = run.wave
-    run.wave, run.cycle = run.wave + 1, run.cycle % 3 + 1
-    mod.notice("Wave " .. finished .. " clear! Wave " .. run.wave .. ": " .. GROUP_NAMES[run.cycle] .. ".")
+    run.wave = run.wave + 1
+    run.cycle = run.cycle % 3 + 1 -- preserve the Mixed drill selected when leaving Endless
+    mod.notice("Wave " .. finished .. " clear! Wave " .. run.wave .. ": " .. GROUP_NAMES[group_index()] .. ".")
     run.phase, run.ticks = "waiting", 30
     run.endless_spawned, run.endless_targets = 0, {}
     run.refill_ticks, run.endless_failures = 30, 0

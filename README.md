@@ -51,7 +51,7 @@ For focused drills, use these practice options:
 
 | Goal | Setting |
 | --- | --- |
-| Fight replenishing Heartless through repeating ground, aerial and armored waves | **Target preset → Endless Heartless** |
+| Fight replenishing Heartless through ground, aerial, armored and mixed waves | **Target preset → Endless Heartless** |
 | Keep a target alive through longer ground or aerial chains | **Target durability → Extended combos (3x HP)** |
 | Practice defense across several encounters without a health refill | **HP recovery → On restart only** |
 | Repeat the same enemy group | **Encounter flow → Repeat current group** |
@@ -64,7 +64,8 @@ These training settings affect the separate practice arena.
 
 Endless Heartless refills individual defeated targets while survivors remain,
 then rotates groups without a final wave. A clear announces the next group before
-it arrives. Reinforcements use the arena's existing spawn pads and look for open
+it arrives. Every fourth wave pairs an airborne Heartless with two ground enemies.
+Reinforcements use the arena's existing spawn pads and look for open
 space around Roxas and surviving enemies. Encounter status tracks the wave and
 total cleared. Restart begins a fresh run. The PC and browser recompilation use
 the same [Endless practice script](practice/ENDLESS.md).
